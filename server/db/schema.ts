@@ -13,15 +13,19 @@ export const projectCategoryCodes = [
   'SPECIAL_COMPETITION',
 ] as const
 export const importRowStatuses = ['PENDING', 'VALID', 'INVALID', 'IMPORTED'] as const
-export const importBatchStatuses = ['UPLOADED', 'VALIDATING', 'READY', 'IMPORTED', 'FAILED'] as const
+export const importBatchStatuses = ['UPLOADED', 'VALIDATING', 'READY', 'IMPORTED', 'FAILED', 'CANCELLED'] as const
 export const importResultTypes = [
   'NEW_STUDENT',
   'CONTINUING_STUDENT',
   'ADVISOR_CHANGED',
   'TALENT_AREA_CHANGED',
+  'ADVISOR_AND_TALENT_CHANGED',
+  'UNMATCHED_TEACHER',
   'NOT_IN_CURRENT_IMPORT',
   'INVALID_RECORD',
   'DUPLICATE_BILSEM_NO',
+  'UNEXPECTED_COLUMN',
+  'UNEXPECTED_ROW',
 ] as const
 export const participationTypes = ['INDIVIDUAL', 'TEAM'] as const
 export const notificationTypes = [
@@ -119,6 +123,7 @@ export const studentEnrollments = sqliteTable('student_enrollments', {
   gradeLevel: integer('grade_level'),
   className: text('class_name'),
   advisorName: text('advisor_name'),
+  advisorUserId: text('advisor_user_id').references(() => users.id, { onDelete: 'restrict' }),
   talentArea: text('talent_area'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
   ...timestamps,
@@ -248,7 +253,13 @@ export const importBatches = sqliteTable('import_batches', {
   totalRows: integer('total_rows').notNull().default(0),
   validRows: integer('valid_rows').notNull().default(0),
   invalidRows: integer('invalid_rows').notNull().default(0),
+  newStudentCount: integer('new_student_count').notNull().default(0),
+  continuingStudentCount: integer('continuing_student_count').notNull().default(0),
+  changedCount: integer('changed_count').notNull().default(0),
+  warningsJson: text('warnings_json'),
   createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  approvedBy: text('approved_by').references(() => users.id, { onDelete: 'restrict' }),
+  approvedAt: integer('approved_at', { mode: 'timestamp_ms' }),
   ...timestamps,
   ...softDelete,
 }, (table) => [index('import_batches_year_idx').on(table.academicYearId)])
@@ -261,6 +272,8 @@ export const importRows = sqliteTable('import_rows', {
   normalizedJson: text('normalized_json'),
   status: text('status', { enum: importRowStatuses }).notNull().default('PENDING'),
   resultType: text('result_type', { enum: importResultTypes }),
+  matchedAdvisorUserId: text('matched_advisor_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  isSourceRow: integer('is_source_row', { mode: 'boolean' }).notNull().default(true),
   errorMessage: text('error_message'),
   studentId: text('student_id').references(() => students.id, { onDelete: 'restrict' }),
   enrollmentId: text('enrollment_id').references(() => studentEnrollments.id, { onDelete: 'restrict' }),
@@ -312,3 +325,4 @@ export type ProjectCategoryCode = (typeof projectCategoryCodes)[number]
 export type ParticipationType = (typeof participationTypes)[number]
 export type NotificationType = (typeof notificationTypes)[number]
 export type ImportResultType = (typeof importResultTypes)[number]
+export type ImportRowStatus = (typeof importRowStatuses)[number]

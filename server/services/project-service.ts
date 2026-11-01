@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { and, eq, isNull, ne } from 'drizzle-orm'
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
 import type { LibSQLDatabase } from 'drizzle-orm/libsql'
-import { assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError } from '../authorization'
+import { assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization'
 import * as schema from '../db/schema'
 
 export type AppDatabase = LibSQLDatabase<typeof schema>
@@ -27,6 +27,15 @@ export type CreateProjectInput = {
   enrollmentIds: string[]
 }
 
+export type ListProjectsFilters = {
+  academicYearId?: string
+  categoryId?: string
+  statusId?: string
+  studentId?: string
+  advisorUserId?: string
+  includeArchived?: boolean
+}
+
 export class ProjectRuleError extends Error {
   readonly statusCode = 422
 
@@ -39,8 +48,173 @@ export class ProjectRuleError extends Error {
 export class ProjectService {
   constructor(private readonly database: AppDatabase) {}
 
+  async listProjects(actor: AuthenticatedUser, filters: ListProjectsFilters = {}) {
+    if (!actor || !actor.isActive) throw new AuthorizationError()
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') throw new AuthorizationError()
+
+    const conditions = []
+
+    if (actor.role !== 'ADMIN' || !filters.includeArchived) {
+      conditions.push(isNull(schema.projects.deletedAt))
+    }
+
+    if (filters.academicYearId) {
+      conditions.push(eq(schema.projects.academicYearId, filters.academicYearId))
+    }
+
+    if (filters.categoryId) {
+      conditions.push(eq(schema.projects.categoryId, filters.categoryId))
+    }
+
+    if (filters.statusId) {
+      conditions.push(eq(schema.projects.statusId, filters.statusId))
+    }
+
+    if (filters.studentId) {
+      const studentProjectRows = await this.database
+        .select({ projectId: schema.projectStudents.projectId })
+        .from(schema.projectStudents)
+        .innerJoin(
+          schema.studentEnrollments,
+          eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId)
+        )
+        .where(and(
+          eq(schema.studentEnrollments.studentId, filters.studentId),
+          isNull(schema.projectStudents.deletedAt)
+        ))
+
+      const projectIds = studentProjectRows.map((r) => r.projectId)
+      if (projectIds.length === 0) return []
+      conditions.push(inArray(schema.projects.id, projectIds))
+    }
+
+    if (filters.advisorUserId) {
+      const advisorProjectRows = await this.database
+        .select({ projectId: schema.projectAdvisors.projectId })
+        .from(schema.projectAdvisors)
+        .where(and(
+          eq(schema.projectAdvisors.userId, filters.advisorUserId),
+          isNull(schema.projectAdvisors.deletedAt)
+        ))
+
+      const projectIds = advisorProjectRows.map((r) => r.projectId)
+      if (projectIds.length === 0) return []
+      conditions.push(inArray(schema.projects.id, projectIds))
+    }
+
+    const baseQuery = this.database
+      .select({
+        id: schema.projects.id,
+        title: schema.projects.title,
+        description: schema.projects.description,
+        academicYearId: schema.projects.academicYearId,
+        academicYearName: schema.academicYears.name,
+        categoryId: schema.projects.categoryId,
+        categoryName: schema.projectCategories.name,
+        statusId: schema.projects.statusId,
+        statusName: schema.projectStatuses.name,
+        createdBy: schema.projects.createdBy,
+        creatorName: schema.users.name,
+        participationType: schema.projects.participationType,
+        teamName: schema.projects.teamName,
+        createdAt: schema.projects.createdAt,
+        updatedAt: schema.projects.updatedAt,
+        deletedAt: schema.projects.deletedAt,
+      })
+      .from(schema.projects)
+      .innerJoin(schema.academicYears, eq(schema.academicYears.id, schema.projects.academicYearId))
+      .innerJoin(schema.projectCategories, eq(schema.projectCategories.id, schema.projects.categoryId))
+      .innerJoin(schema.projectStatuses, eq(schema.projectStatuses.id, schema.projects.statusId))
+      .innerJoin(schema.users, eq(schema.users.id, schema.projects.createdBy))
+
+    if (conditions.length > 0) {
+      return baseQuery.where(and(...conditions))
+    }
+
+    return baseQuery
+  }
+
+  async getProjectDetail(actor: AuthenticatedUser, projectId: string) {
+    if (!actor || !actor.isActive) throw new AuthorizationError()
+
+    const projectRows = await this.database
+      .select({
+        id: schema.projects.id,
+        title: schema.projects.title,
+        description: schema.projects.description,
+        academicYearId: schema.projects.academicYearId,
+        academicYearName: schema.academicYears.name,
+        categoryId: schema.projects.categoryId,
+        categoryName: schema.projectCategories.name,
+        statusId: schema.projects.statusId,
+        statusName: schema.projectStatuses.name,
+        createdBy: schema.projects.createdBy,
+        creatorName: schema.users.name,
+        participationType: schema.projects.participationType,
+        teamName: schema.projects.teamName,
+        createdAt: schema.projects.createdAt,
+        updatedAt: schema.projects.updatedAt,
+        deletedAt: schema.projects.deletedAt,
+      })
+      .from(schema.projects)
+      .innerJoin(schema.academicYears, eq(schema.academicYears.id, schema.projects.academicYearId))
+      .innerJoin(schema.projectCategories, eq(schema.projectCategories.id, schema.projects.categoryId))
+      .innerJoin(schema.projectStatuses, eq(schema.projectStatuses.id, schema.projects.statusId))
+      .innerJoin(schema.users, eq(schema.users.id, schema.projects.createdBy))
+      .where(eq(schema.projects.id, projectId))
+      .limit(1)
+
+    const project = projectRows[0]
+    if (!project || (project.deletedAt !== null && actor.role !== 'ADMIN')) throw new ResourceNotFoundError('Proje bulunamadı.')
+
+    const students = await this.getProjectMembers(actor, projectId)
+
+    const advisors = await this.database
+      .select({
+        userId: schema.users.id,
+        name: schema.users.name,
+        email: schema.users.email,
+        isPrimary: schema.projectAdvisors.isPrimary,
+      })
+      .from(schema.projectAdvisors)
+      .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+      .where(and(
+        eq(schema.projectAdvisors.projectId, projectId),
+        isNull(schema.projectAdvisors.deletedAt),
+      ))
+
+    return {
+      project,
+      students,
+      advisors,
+    }
+  }
+
+  async getProjectMembers(actor: AuthenticatedUser, projectId: string) {
+    if (!actor || !actor.isActive) throw new AuthorizationError()
+    await this.getProject(this.database, projectId, actor.role === 'ADMIN')
+
+    return this.database
+      .select({
+        enrollmentId: schema.studentEnrollments.id,
+        studentId: schema.students.id,
+        bilsemNo: schema.students.bilsemNo,
+        firstName: schema.students.firstName,
+        lastName: schema.students.lastName,
+        gradeLevel: schema.studentEnrollments.gradeLevel,
+        className: schema.studentEnrollments.className,
+      })
+      .from(schema.projectStudents)
+      .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+      .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
+      .where(and(
+        eq(schema.projectStudents.projectId, projectId),
+        isNull(schema.projectStudents.deletedAt),
+      ))
+  }
+
   async createProject(actor: AuthenticatedUser, input: CreateProjectInput) {
-    if (!actor.isActive) throw new AuthorizationError()
+    if (!actor.isActive || !['ADMIN', 'TEACHER'].includes(actor.role)) throw new AuthorizationError()
     this.validateParticipation(input.participationType, input.enrollmentIds)
 
     return this.database.transaction(async (transaction) => {
@@ -59,7 +233,7 @@ export class ProjectService {
         })
         .from(schema.studentEnrollments)
         .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
-        .where(isNull(schema.studentEnrollments.deletedAt))
+        .where(and(inArray(schema.studentEnrollments.id, uniqueEnrollmentIds), isNull(schema.studentEnrollments.deletedAt)))
 
       const selectedEnrollments = enrollmentRows.filter((row) => uniqueEnrollmentIds.includes(row.enrollmentId))
       if (selectedEnrollments.length !== uniqueEnrollmentIds.length) {
@@ -88,13 +262,16 @@ export class ProjectService {
       })))
 
       const category = await transaction
-        .select({ duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled })
+        .select({
+          duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled,
+          duplicateRule: schema.projectCategories.duplicateRule,
+        })
         .from(schema.projectCategories)
         .where(eq(schema.projectCategories.id, input.categoryId))
         .limit(1)
 
       const conflicts: ProjectConflict[] = []
-      if (category[0]?.duplicateCheckEnabled) {
+      if (category[0]?.duplicateCheckEnabled && category[0].duplicateRule === 'ACADEMIC_YEAR_STUDENT_CATEGORY') {
         for (const enrollment of selectedEnrollments) {
           await transaction.insert(schema.projectDuplicateClaims).values({
             academicYearId: input.academicYearId,
@@ -261,15 +438,21 @@ export class ProjectService {
         })
       } else {
         if (members.length <= 2) throw new ProjectRuleError('Takım projesinde en az iki öğrenci bulunmalıdır.')
+        if (!members.some((member) => member.enrollmentId === enrollmentId)) {
+          throw new ProjectRuleError('Öğrenci bu takım projesinin üyesi değil.')
+        }
         await transaction.update(schema.projectStudents).set({ deletedAt: new Date(), deletedBy: actor.id, updatedAt: new Date() })
           .where(and(eq(schema.projectStudents.projectId, projectId), eq(schema.projectStudents.enrollmentId, enrollmentId)))
       }
 
       let memberConflict: { projectId: string; title: string; ownerId: string; ownerName: string } | undefined
       if (operation === 'ADD') {
-        const category = await transaction.select({ enabled: schema.projectCategories.duplicateCheckEnabled })
+        const category = await transaction.select({
+          enabled: schema.projectCategories.duplicateCheckEnabled,
+          duplicateRule: schema.projectCategories.duplicateRule,
+        })
           .from(schema.projectCategories).where(eq(schema.projectCategories.id, project.categoryId)).limit(1)
-        if (category[0]?.enabled) {
+        if (category[0]?.enabled && category[0].duplicateRule === 'ACADEMIC_YEAR_STUDENT_CATEGORY') {
           await transaction.insert(schema.projectDuplicateClaims).values({
             academicYearId: project.academicYearId,
             studentId: enrollment[0].studentId,
@@ -341,7 +524,7 @@ export class ProjectService {
     }).from(schema.projects)
       .innerJoin(schema.projectStatuses, eq(schema.projectStatuses.id, schema.projects.statusId))
       .where(eq(schema.projects.id, projectId)).limit(1)
-    if (!rows[0] || (!includeArchived && rows[0].deletedAt !== null)) throw new ProjectRuleError('Proje bulunamadı.')
+    if (!rows[0] || (!includeArchived && rows[0].deletedAt !== null)) throw new ResourceNotFoundError('Proje bulunamadı.')
     return rows[0]
   }
 

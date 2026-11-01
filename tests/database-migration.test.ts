@@ -49,14 +49,14 @@ describe('initial database migration', () => {
     expect(result.rows.map((row) => row.code)).toHaveLength(8)
   })
 
-  it('enforces unique student codes', async () => {
+  it('enforces unique BİLSEM numbers', async () => {
     await client.execute({
-      sql: 'INSERT INTO students (id, student_code, first_name, last_name) VALUES (?, ?, ?, ?)',
+      sql: 'INSERT INTO students (id, bilsem_no, first_name, last_name) VALUES (?, ?, ?, ?)',
       args: ['student-1', 'SYNTHETIC-001', 'Test', 'Student'],
     })
 
     await expect(client.execute({
-      sql: 'INSERT INTO students (id, student_code, first_name, last_name) VALUES (?, ?, ?, ?)',
+      sql: 'INSERT INTO students (id, bilsem_no, first_name, last_name) VALUES (?, ?, ?, ?)',
       args: ['student-2', 'SYNTHETIC-001', 'Other', 'Student'],
     })).rejects.toThrow()
   })

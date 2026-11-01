@@ -51,12 +51,17 @@ export function canModifyAuditLog(): false {
 }
 
 export class AuthorizationError extends Error {
-  readonly statusCode = 403
+  readonly statusCode: 401 | 403
 
-  constructor(message = 'Bu işlem için yetkiniz yok.') {
+  constructor(message = 'Bu işlem için yetkiniz yok.', statusCode: 401 | 403 = 403) {
     super(message)
     this.name = 'AuthorizationError'
+    this.statusCode = statusCode
   }
+}
+
+export class ResourceNotFoundError extends Error {
+  readonly statusCode = 404
 }
 
 export function assertCanModifyProject(user: AuthenticatedUser, project: ProjectOwnership): void {

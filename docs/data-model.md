@@ -19,7 +19,7 @@
 | `verifications` | E-posta/kimlik doğrulama kodları | Identifier indexli |
 | `students` | Yıldan bağımsız öğrenci ana kaydı | Öğrenci kodu unique |
 | `academic_years` | Akademik dönem | Ad unique, geçmiş dönemler korunur |
-| `student_enrollments` | Öğrencinin akademik yıl kaydı | Student + academic year unique |
+| `student_enrollments` | Öğrencinin akademik yıl kaydı | Student + academic year unique; advisor name and optional account id |
 | `project_categories` | Proje türü sözlüğü | Kod unique, sekiz başlangıç kategorisi |
 | `project_statuses` | Durum sözlüğü | Kod unique |
 | `projects` | Proje ana kaydı | Yıl, kategori, durum ve oluşturucu zorunlu |
@@ -28,8 +28,8 @@
 | `project_status_history` | Durum geçiş geçmişi | Append-only |
 | `audit_logs` | İşlem denetim izi | Append-only, actor/entity indexli |
 | `project_attachments` | Dosya metadata kaydı | Storage key unique; dosya verisi DB dışında |
-| `import_batches` | Toplu içe aktarma işi | Akademik yıl ve oluşturan kullanıcı zorunlu |
-| `import_rows` | İçe aktarmadaki satır sonucu | Batch + row number unique |
+| `import_batches` | Toplu içe aktarma işi | Akademik yıl, yükleyen, sayaçlar, uyarılar ve onaylayan bilgisi |
+| `import_rows` | İçe aktarmadaki satır sonucu | Batch + row number unique; preview resolution and source-row marker |
 
 ## Yetki Modeli
 

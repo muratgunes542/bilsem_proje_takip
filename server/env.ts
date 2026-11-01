@@ -7,6 +7,7 @@ const environmentSchema = z.object({
   BETTER_AUTH_SECRET: z.string().min(32),
   BETTER_AUTH_URL: z.url(),
   TRUSTED_ORIGINS: z.string().default('http://localhost:3000,http://localhost:5173'),
+  IMPORT_MAX_FILE_BYTES: z.coerce.number().int().min(1024).max(4 * 1024 * 1024).default(4 * 1024 * 1024),
 })
 
 export const env = environmentSchema.parse(process.env)

@@ -1,0 +1,5 @@
+process.env.APP_ENV = 'test'
+process.env.BETTER_AUTH_SECRET ??= 'test-only-secret-that-is-long-enough-123456'
+process.env.BETTER_AUTH_URL ??= 'http://localhost:3000'
+process.env.TURSO_DATABASE_URL ??= 'file:./test-runtime.db'
+process.env.IMPORT_MAX_FILE_BYTES ??= '131072'
