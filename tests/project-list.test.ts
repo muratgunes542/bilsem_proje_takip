@@ -162,5 +162,10 @@ describe('Project Listing and Query Performance', () => {
     const advisorProjects = await projectService.listProjects(teacher1, { advisorUserId: teacher2.id })
     expect(advisorProjects).toHaveLength(1)
     expect(advisorProjects[0]?.id).toBe(p1.projectId)
+    expect(advisorProjects[0]).toMatchObject({ students: ['Ali Yılmaz'], advisors: ['Teacher Two'] })
+
+    const searchedProjects = await projectService.listProjects(teacher1, { search: 'Student 1' })
+    expect(searchedProjects.map((project) => project.id)).toContain(p1.projectId)
+    expect(searchedProjects).toHaveLength(1)
   })
 })

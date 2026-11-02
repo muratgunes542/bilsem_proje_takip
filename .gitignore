@@ -17,6 +17,7 @@ dist-ssr
 *.db
 *.db-shm
 *.db-wal
+/data/
 .vercel
 coverage
 

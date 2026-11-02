@@ -53,6 +53,7 @@ export const users = sqliteTable('users', {
   image: text('image'),
   role: text('role', { enum: userRoles }).notNull().default('TEACHER'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  mustChangePassword: integer('must_change_password', { mode: 'boolean' }).notNull().default(false),
   ...timestamps,
   ...softDelete,
 }, (table) => [

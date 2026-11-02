@@ -1,4 +1,5 @@
-import { and, count, desc, eq, isNull, like, or } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
+import { and, asc, count, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm'
 import { AuthorizationError, canViewStudents, ResourceNotFoundError, type AuthenticatedUser } from '../authorization'
 import * as schema from '../db/schema'
 import type { AppDatabase } from './project-service'
@@ -8,12 +9,95 @@ export type ListStudentsOptions = {
   pageSize?: number
   search?: string
   academicYearId?: string
+  allAcademicYears?: boolean
   talentArea?: string
   advisorName?: string
 }
 
+export class StudentRuleError extends Error {
+  readonly statusCode = 422
+}
+
 export class StudentService {
   constructor(private readonly database: AppDatabase) {}
+
+  async createStudent(actor: AuthenticatedUser, input: { bilsemNo: string; firstName: string; lastName: string; academicYearId: string; talentArea: string; advisorUserId?: string | null }) {
+    if (actor.role !== 'ADMIN' || !actor.isActive) throw new AuthorizationError('Öğrenci kaydı oluşturma yetkiniz yok.')
+    const bilsemNo = input.bilsemNo.trim()
+    if (!/^\d+$/.test(bilsemNo)) throw new StudentRuleError('BİLSEM numarası yalnızca rakamlardan oluşmalıdır.')
+    return this.database.transaction(async (tx) => {
+      const duplicate = await tx.select({ id: schema.students.id }).from(schema.students).where(eq(schema.students.bilsemNo, bilsemNo)).limit(1)
+      if (duplicate[0]) throw new StudentRuleError('Bu BİLSEM numarası başka bir öğrenciye kayıtlı.')
+      await this.assertEnrollmentReferences(tx, input.academicYearId, input.advisorUserId)
+      const studentId = randomUUID()
+      const enrollmentId = randomUUID()
+      await tx.insert(schema.students).values({ id: studentId, bilsemNo, firstName: input.firstName.trim(), lastName: input.lastName.trim() })
+      await tx.insert(schema.studentEnrollments).values({ id: enrollmentId, studentId, academicYearId: input.academicYearId, talentArea: input.talentArea.trim() || null, advisorUserId: input.advisorUserId ?? null, advisorName: await this.advisorName(tx, input.advisorUserId) })
+      await tx.insert(schema.auditLogs).values({ id: randomUUID(), actorUserId: actor.id, action: 'STUDENT_CREATED', entityType: 'STUDENT', entityId: studentId, afterJson: JSON.stringify({ bilsemNo, firstName: input.firstName.trim(), lastName: input.lastName.trim(), enrollmentId, academicYearId: input.academicYearId }) })
+      return { studentId, enrollmentId }
+    })
+  }
+
+  async updateStudent(actor: AuthenticatedUser, studentId: string, input: { bilsemNo: string; firstName: string; lastName: string }) {
+    if (actor.role !== 'ADMIN' || !actor.isActive) throw new AuthorizationError('Öğrenci düzenleme yetkiniz yok.')
+    const bilsemNo = input.bilsemNo.trim()
+    if (!/^\d+$/.test(bilsemNo)) throw new StudentRuleError('BİLSEM numarası yalnızca rakamlardan oluşmalıdır.')
+    return this.database.transaction(async (tx) => {
+      const rows = await tx.select().from(schema.students).where(and(eq(schema.students.id, studentId), isNull(schema.students.deletedAt))).limit(1)
+      const old = rows[0]
+      if (!old) throw new ResourceNotFoundError('Öğrenci bulunamadı.')
+      const duplicate = await tx.select({ id: schema.students.id }).from(schema.students).where(eq(schema.students.bilsemNo, bilsemNo)).limit(1)
+      if (duplicate[0] && duplicate[0].id !== studentId) throw new StudentRuleError('Bu BİLSEM numarası başka bir öğrenciye kayıtlı.')
+      const changes = { bilsemNo, firstName: input.firstName.trim(), lastName: input.lastName.trim(), updatedAt: new Date() }
+      await tx.update(schema.students).set(changes).where(eq(schema.students.id, studentId))
+      await tx.insert(schema.auditLogs).values({ id: randomUUID(), actorUserId: actor.id, action: 'STUDENT_UPDATED', entityType: 'STUDENT', entityId: studentId, beforeJson: JSON.stringify({ bilsemNo: old.bilsemNo, firstName: old.firstName, lastName: old.lastName }), afterJson: JSON.stringify(changes) })
+      return { studentId }
+    })
+  }
+
+  async addEnrollment(actor: AuthenticatedUser, studentId: string, input: { academicYearId: string; talentArea: string; advisorUserId?: string | null }) {
+    if (actor.role !== 'ADMIN' || !actor.isActive) throw new AuthorizationError('Öğrenci yıl kaydı ekleme yetkiniz yok.')
+    return this.database.transaction(async (tx) => {
+      const student = await tx.select({ id: schema.students.id }).from(schema.students).where(and(eq(schema.students.id, studentId), isNull(schema.students.deletedAt))).limit(1)
+      if (!student[0]) throw new ResourceNotFoundError('Öğrenci bulunamadı.')
+      await this.assertEnrollmentReferences(tx, input.academicYearId, input.advisorUserId)
+      const existing = await tx.select({ id: schema.studentEnrollments.id }).from(schema.studentEnrollments).where(and(eq(schema.studentEnrollments.studentId, studentId), eq(schema.studentEnrollments.academicYearId, input.academicYearId), isNull(schema.studentEnrollments.deletedAt))).limit(1)
+      if (existing[0]) throw new StudentRuleError('Bu öğrencinin seçilen akademik yılda zaten kaydı var. Düzenlemek için mevcut yıl kaydını kullanın.')
+      const enrollmentId = randomUUID()
+      await tx.insert(schema.studentEnrollments).values({ id: enrollmentId, studentId, academicYearId: input.academicYearId, talentArea: input.talentArea.trim() || null, advisorUserId: input.advisorUserId ?? null, advisorName: await this.advisorName(tx, input.advisorUserId) })
+      await tx.insert(schema.auditLogs).values({ id: randomUUID(), actorUserId: actor.id, action: 'STUDENT_ENROLLMENT_CREATED', entityType: 'STUDENT_ENROLLMENT', entityId: enrollmentId, afterJson: JSON.stringify({ studentId, academicYearId: input.academicYearId, talentArea: input.talentArea, advisorUserId: input.advisorUserId ?? null }) })
+      return { enrollmentId }
+    })
+  }
+
+  async updateEnrollment(actor: AuthenticatedUser, studentId: string, enrollmentId: string, input: { talentArea: string; advisorUserId?: string | null }) {
+    if (actor.role !== 'ADMIN' || !actor.isActive) throw new AuthorizationError('Akademik yıl kaydı düzenleme yetkiniz yok.')
+    return this.database.transaction(async (tx) => {
+      const rows = await tx.select().from(schema.studentEnrollments).where(and(eq(schema.studentEnrollments.id, enrollmentId), eq(schema.studentEnrollments.studentId, studentId), isNull(schema.studentEnrollments.deletedAt))).limit(1)
+      const old = rows[0]
+      if (!old) throw new ResourceNotFoundError('Akademik yıl kaydı bulunamadı.')
+      await this.assertEnrollmentReferences(tx, old.academicYearId, input.advisorUserId)
+      const advisorName = await this.advisorName(tx, input.advisorUserId)
+      await tx.update(schema.studentEnrollments).set({ talentArea: input.talentArea.trim() || null, advisorUserId: input.advisorUserId ?? null, advisorName, updatedAt: new Date() }).where(eq(schema.studentEnrollments.id, enrollmentId))
+      await tx.insert(schema.auditLogs).values({ id: randomUUID(), actorUserId: actor.id, action: 'STUDENT_ENROLLMENT_UPDATED', entityType: 'STUDENT_ENROLLMENT', entityId: enrollmentId, beforeJson: JSON.stringify({ talentArea: old.talentArea, advisorUserId: old.advisorUserId, advisorName: old.advisorName }), afterJson: JSON.stringify({ talentArea: input.talentArea.trim(), advisorUserId: input.advisorUserId ?? null, academicYearId: old.academicYearId }) })
+      return { enrollmentId }
+    })
+  }
+
+  private async assertEnrollmentReferences(tx: Parameters<Parameters<AppDatabase['transaction']>[0]>[0], academicYearId: string, advisorUserId?: string | null) {
+    const year = await tx.select({ id: schema.academicYears.id }).from(schema.academicYears).where(and(eq(schema.academicYears.id, academicYearId), isNull(schema.academicYears.deletedAt))).limit(1)
+    if (!year[0]) throw new StudentRuleError('Seçilen akademik yıl bulunamadı.')
+    if (advisorUserId) {
+      const teacher = await tx.select({ id: schema.users.id }).from(schema.users).where(and(eq(schema.users.id, advisorUserId), eq(schema.users.role, 'TEACHER'), eq(schema.users.isActive, true), isNull(schema.users.deletedAt))).limit(1)
+      if (!teacher[0]) throw new StudentRuleError('Danışman olarak etkin bir öğretmen seçin.')
+    }
+  }
+
+  private async advisorName(tx: Parameters<Parameters<AppDatabase['transaction']>[0]>[0], advisorUserId?: string | null) {
+    if (!advisorUserId) return null
+    const teacher = await tx.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, advisorUserId)).limit(1)
+    return teacher[0]?.name ?? null
+  }
 
   async listStudents(user: AuthenticatedUser, options: ListStudentsOptions = {}) {
     if (!canViewStudents(user)) throw new AuthorizationError()
@@ -23,7 +107,7 @@ export class StudentService {
     const offset = (page - 1) * pageSize
 
     let activeYearId = options.academicYearId
-    if (!activeYearId) {
+    if (!activeYearId && !options.allAcademicYears) {
       const currentYear = await this.database
         .select({ id: schema.academicYears.id })
         .from(schema.academicYears)
@@ -56,6 +140,7 @@ export class StudentService {
       conditions.push(or(
         like(schema.students.firstName, term),
         like(schema.students.lastName, term),
+        like(sql`${schema.students.firstName} || ' ' || ${schema.students.lastName}`, term),
         like(schema.students.bilsemNo, term),
       )!)
     }
@@ -83,12 +168,14 @@ export class StudentService {
         gradeLevel: schema.studentEnrollments.gradeLevel,
         className: schema.studentEnrollments.className,
         advisorName: schema.studentEnrollments.advisorName,
+        advisorUserId: schema.studentEnrollments.advisorUserId,
         talentArea: schema.studentEnrollments.talentArea,
         isActive: schema.studentEnrollments.isActive,
       })
       .from(schema.studentEnrollments)
       .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
       .where(whereClause)
+      .orderBy(asc(schema.students.lastName), asc(schema.students.firstName), asc(schema.students.bilsemNo))
       .limit(pageSize)
       .offset(offset)
 
@@ -126,10 +213,12 @@ export class StudentService {
         enrollmentId: schema.studentEnrollments.id,
         academicYearId: schema.studentEnrollments.academicYearId,
         academicYearName: schema.academicYears.name,
+        isCurrentAcademicYear: schema.academicYears.isCurrent,
         schoolName: schema.studentEnrollments.schoolName,
         gradeLevel: schema.studentEnrollments.gradeLevel,
         className: schema.studentEnrollments.className,
         advisorName: schema.studentEnrollments.advisorName,
+        advisorUserId: schema.studentEnrollments.advisorUserId,
         talentArea: schema.studentEnrollments.talentArea,
         isActive: schema.studentEnrollments.isActive,
       })
@@ -152,7 +241,7 @@ export class StudentService {
     const student = await this.database.select({ id: schema.students.id }).from(schema.students)
       .where(and(eq(schema.students.id, studentId), isNull(schema.students.deletedAt))).limit(1)
     if (!student[0]) throw new ResourceNotFoundError('Öğrenci bulunamadı.')
-    return this.database.select({
+    const projects = await this.database.select({
       projectId: schema.projects.id,
       title: schema.projects.title,
       academicYear: schema.academicYears.name,
@@ -173,5 +262,19 @@ export class StudentService {
         isNull(schema.projectStudents.deletedAt),
         isNull(schema.projects.deletedAt),
       ))
+      .orderBy(desc(schema.academicYears.startsOn), asc(schema.projects.title))
+    if (projects.length === 0) return []
+    const projectIds = projects.map((project) => project.projectId)
+    const advisorRows = await this.database.select({
+      projectId: schema.projectAdvisors.projectId,
+      userId: schema.users.id,
+      name: schema.users.name,
+    }).from(schema.projectAdvisors)
+      .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+      .where(and(inArray(schema.projectAdvisors.projectId, projectIds), isNull(schema.projectAdvisors.deletedAt)))
+    return projects.map((project) => ({
+      ...project,
+      advisors: advisorRows.filter((advisor) => advisor.projectId === project.projectId),
+    }))
   }
 }

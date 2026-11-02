@@ -13,7 +13,7 @@
 
 | Tablo | Amaç | Önemli kısıtlar |
 | --- | --- | --- |
-| `users` | Better Auth kullanıcısı ve uygulama rolü | E-posta unique, rol ADMIN/TEACHER |
+| `users` | Better Auth kullanıcısı ve uygulama rolü | E-posta unique, rol ADMIN/TEACHER, `must_change_password` ilk giriş zorunluluğu |
 | `sessions` | Better Auth oturumları | Token unique, kullanıcı silinirse cascade |
 | `accounts` | Parola ve harici sağlayıcı hesapları | Provider + account unique |
 | `verifications` | E-posta/kimlik doğrulama kodları | Identifier indexli |

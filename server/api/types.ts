@@ -20,4 +20,5 @@ export type ApiContextUser = {
   isActive: boolean
   name: string
   email: string
+  mustChangePassword: boolean
 }

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "vercel dev",
+    "dev:local": "dotenv -e .env -- tsx scripts/dev-server.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
@@ -14,6 +15,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:migrate:test": "dotenv -e .env.test -- npm run db:migrate",
+    "db:bootstrap-admin:local": "dotenv -e .env -- tsx scripts/promote-local-admin.ts",
     "db:studio": "drizzle-kit studio",
     "preview": "vite preview"
   },
@@ -22,6 +24,7 @@
     "better-auth": "^1.7.14",
     "drizzle-orm": "^0.45.4",
     "exceljs": "^4.4.0",
+    "lucide-react": "^1.66.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "zod": "^4.6.7"

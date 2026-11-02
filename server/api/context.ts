@@ -36,6 +36,7 @@ export async function getAuthenticatedApiUser(
         email: schema.users.email,
         role: schema.users.role,
         isActive: schema.users.isActive,
+        mustChangePassword: schema.users.mustChangePassword,
       })
       .from(schema.users)
       .where(and(eq(schema.users.id, testUserId), isNull(schema.users.deletedAt)))
@@ -48,6 +49,7 @@ export async function getAuthenticatedApiUser(
         isActive: Boolean(userRows[0].isActive),
         name: userRows[0].name,
         email: userRows[0].email,
+        mustChangePassword: Boolean(userRows[0].mustChangePassword),
       }
     }
   }
@@ -63,6 +65,7 @@ export async function getAuthenticatedApiUser(
       email: schema.users.email,
       role: schema.users.role,
       isActive: schema.users.isActive,
+      mustChangePassword: schema.users.mustChangePassword,
     }).from(schema.users).where(and(eq(schema.users.id, session.user.id), isNull(schema.users.deletedAt))).limit(1)
     const currentUser = userRows[0]
     if (!currentUser) return null
@@ -73,6 +76,7 @@ export async function getAuthenticatedApiUser(
       isActive: Boolean(currentUser.isActive),
       name: currentUser.name,
       email: currentUser.email,
+      mustChangePassword: Boolean(currentUser.mustChangePassword),
     }
   } catch {
     return null

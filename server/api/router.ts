@@ -1,18 +1,24 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { AuthorizationError } from '../authorization'
+import { createAuth } from '../auth'
 import { db } from '../db/client'
+import * as schema from '../db/schema'
 import { AcademicYearService } from '../services/academic-year-service'
 import { StudentImportService } from '../services/import-service'
 import { NotificationService } from '../services/notification-service'
 import { ProjectRuleError, ProjectService } from '../services/project-service'
-import { StudentService } from '../services/student-service'
-import { UserService } from '../services/user-service'
+import { StudentRuleError, StudentService } from '../services/student-service'
+import { UserRuleError, UserService } from '../services/user-service'
 import { getAuthenticatedApiUser } from './context'
 import type { ApiResponse } from './types'
 import type { AppDatabase } from '../services/project-service'
 import { env } from '../env'
 import { ImportFileError, parseStudentWorkbook } from '../services/xlsx-import-parser'
+import { DashboardService } from '../services/dashboard-service'
+import { ReportService } from '../services/report-service'
 
 // Zod Schemas
 const createAcademicYearSchema = z.object({
@@ -48,6 +54,20 @@ const updateUserSchema = z.object({
   role: z.enum(['ADMIN', 'TEACHER']).optional(),
   isActive: z.boolean().optional(),
 })
+const createTeacherSchema = z.object({ name: z.string().trim().min(2, 'Ad soyad en az 2 karakter olmalıdır.').max(200), email: z.email('Geçerli bir e-posta adresi girin.').transform((email) => email.trim().toLowerCase()) }).strict()
+const changePasswordSchema = z.object({ currentPassword: z.string().min(1, 'Mevcut parola zorunludur.'), newPassword: z.string().min(8, 'Yeni parola en az 8 karakter olmalıdır.').max(128), newPasswordConfirmation: z.string().min(8, 'Parola tekrarı en az 8 karakter olmalıdır.') }).strict().refine((value) => value.newPassword === value.newPasswordConfirmation, { message: 'Yeni parolalar eşleşmiyor.', path: ['newPasswordConfirmation'] })
+
+const createStudentSchema = z.object({
+  bilsemNo: z.string().trim().regex(/^\d+$/, 'BİLSEM numarası yalnızca rakamlardan oluşmalıdır.'),
+  firstName: z.string().trim().min(1, 'Ad zorunludur.').max(100),
+  lastName: z.string().trim().min(1, 'Soyad zorunludur.').max(100),
+  academicYearId: z.string().min(1, 'Akademik yıl seçin.'),
+  talentArea: z.string().trim().min(1, 'Yetenek alanı zorunludur.').max(100),
+  advisorUserId: z.string().nullable().optional(),
+}).strict()
+const updateStudentSchema = createStudentSchema.pick({ bilsemNo: true, firstName: true, lastName: true }).strict()
+const createEnrollmentSchema = createStudentSchema.pick({ academicYearId: true, talentArea: true, advisorUserId: true }).strict()
+const updateEnrollmentSchema = createStudentSchema.pick({ talentArea: true, advisorUserId: true }).strict()
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).max(100000).default(1),
@@ -56,6 +76,8 @@ const paginationSchema = z.object({
 
 const resolveAdvisorSchema = z.object({ advisorUserId: z.string().min(1) }).strict()
 
+class PasswordChangeError extends Error { readonly statusCode = 422 }
+
 export type ApiRequest = {
   method: string
   url: string
@@ -63,10 +85,24 @@ export type ApiRequest = {
   body?: unknown
 }
 
-export async function handleApiRequest(req: ApiRequest, database: AppDatabase = db): Promise<{ statusCode: number; payload: ApiResponse }> {
+export async function handleApiRequest(req: ApiRequest, database: AppDatabase = db): Promise<{ statusCode: number; payload: ApiResponse; responseHeaders?: Headers }> {
   const parsedUrl = new URL(req.url, 'http://localhost')
-  const pathname = parsedUrl.pathname.replace(/\/$/, '')
+  let pathname = parsedUrl.pathname.replace(/\/$/, '')
   const method = req.method.toUpperCase()
+
+  if (pathname === '/overview' || pathname === '/reports/overview') pathname = '/api/reports/overview'
+  if (pathname === '/students' || pathname === '/reports/students') pathname = '/api/reports/students'
+  if (pathname === '/teachers' || pathname === '/reports/teachers') pathname = '/api/reports/teachers'
+  if (pathname === '/projects' || pathname === '/reports/projects') pathname = '/api/reports/projects'
+  if (/^\/(?:reports\/)?teachers\/([^/]+)\/projects$/.test(pathname)) {
+    const match = pathname.match(/^\/(?:reports\/)?teachers\/([^/]+)\/projects$/)
+    if (match?.[1]) {
+      pathname = `/api/reports/teachers/${match[1]}/projects`
+    }
+  }
+  if (!pathname.startsWith('/api') && (pathname.startsWith('/overview') || pathname.startsWith('/students') || pathname.startsWith('/teachers') || pathname.startsWith('/projects') || pathname.startsWith('/reports'))) {
+    pathname = `/api/reports${pathname.startsWith('/') ? '' : '/'}${pathname}`
+  }
 
   try {
     const user = await getAuthenticatedApiUser(req, database)
@@ -76,18 +112,62 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
     const projectService = new ProjectService(database)
     const notificationService = new NotificationService(database)
     const importService = new StudentImportService(database)
-    const requireAuth = () => {
+    const dashboardService = new DashboardService(database)
+    const reportService = new ReportService(database)
+    const requireAuth = (allowForcedPasswordChange = false) => {
       if (!user) throw new AuthorizationError('Oturum açmanız gerekiyor.', 401)
       if (!user.isActive) throw new AuthorizationError('Hesabınız pasif durumdadır.', 403)
+      if (user.mustChangePassword && !allowForcedPasswordChange) throw new AuthorizationError('Uygulamayı kullanmadan önce geçici parolanızı değiştirmelisiniz.', 403)
       return user
     }
     // -------------------------------------------------------------
     // A. Session & Users
     // -------------------------------------------------------------
     if (method === 'GET' && pathname === '/api/me') {
-      const actor = requireAuth()
+      const actor = requireAuth(true)
       const profile = await userService.getCurrentUserProfile(actor)
       return { statusCode: 200, payload: { success: true, data: profile } }
+    }
+
+    if (method === 'POST' && pathname === '/api/account/password') {
+      const actor = requireAuth(true)
+      const input = changePasswordSchema.parse(req.body)
+      const headers = new Headers()
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (typeof value === 'string') headers.set(key, value)
+        else if (Array.isArray(value)) headers.set(key, value.join(', '))
+      }
+      const passwordAuth = createAuth(database as typeof db)
+      const session = await passwordAuth.api.getSession({ headers })
+      if (!session || session.user.id !== actor.id) throw new AuthorizationError('Yalnızca kendi parolanızı değiştirebilirsiniz.', 401)
+      let passwordChangeHeaders: Headers
+      try {
+        const passwordChange = await passwordAuth.api.changePassword({ body: { currentPassword: input.currentPassword, newPassword: input.newPassword, revokeOtherSessions: true }, headers, returnHeaders: true })
+        passwordChangeHeaders = passwordChange.headers
+      } catch (error) {
+        const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0
+        throw new PasswordChangeError(status === 401 || status === 400 ? 'Mevcut parolanız doğru değil veya parola isteği geçersiz.' : 'Parola değiştirilemedi. Lütfen tekrar deneyin.')
+      }
+      await database.transaction(async (transaction) => {
+        await transaction.update(schema.users).set({ mustChangePassword: false, updatedAt: new Date() }).where(eq(schema.users.id, actor.id))
+        await transaction.insert(schema.auditLogs).values({ id: randomUUID(), actorUserId: actor.id, action: 'USER_PASSWORD_CHANGED', entityType: 'USER', entityId: actor.id, afterJson: JSON.stringify({ method: 'BETTER_AUTH_CHANGE_PASSWORD', revokedOtherSessions: true }) })
+      })
+      return { statusCode: 200, payload: { success: true, data: { message: 'Parolanız değiştirildi. Bu oturum açık kalır; diğer oturumlar kapatıldı.' } }, responseHeaders: passwordChangeHeaders }
+    }
+
+    if (method === 'POST' && pathname === '/api/admin/teachers') {
+      const actor = requireAuth()
+      if (actor.role !== 'ADMIN') throw new AuthorizationError('Öğretmen hesabı oluşturma yetkiniz yok.')
+      const input = createTeacherSchema.parse(req.body)
+      const temporaryPassword = `${randomBytes(24).toString('base64url')}aA7!`
+      let created: Awaited<ReturnType<ReturnType<typeof createAuth>['api']['signUpEmail']>>
+      try {
+        created = await createAuth(database as typeof db, false).api.signUpEmail({ body: { name: input.name, email: input.email, password: temporaryPassword } })
+      } catch {
+        throw new UserRuleError('Öğretmen hesabı oluşturulamadı. E-posta adresinin daha önce kullanılmadığını kontrol edin.')
+      }
+      await userService.markTeacherMustChangePassword(actor, created.user.id)
+      return { statusCode: 201, payload: { success: true, data: { user: { id: created.user.id, name: created.user.name, email: created.user.email, role: 'TEACHER', isActive: true, mustChangePassword: true }, temporaryPassword } } }
     }
 
     if (method === 'GET' && pathname === '/api/admin/users') {
@@ -115,16 +195,44 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
     // -------------------------------------------------------------
     // B. Students
     // -------------------------------------------------------------
+    if (method === 'POST' && pathname === '/api/admin/students') {
+      const actor = requireAuth()
+      const result = await studentService.createStudent(actor, createStudentSchema.parse(req.body))
+      return { statusCode: 201, payload: { success: true, data: result } }
+    }
+
+    const adminStudentEnrollmentMatch = pathname.match(/^\/api\/admin\/students\/([^/]+)\/enrollments$/)
+    if (adminStudentEnrollmentMatch && method === 'POST') {
+      const actor = requireAuth()
+      const result = await studentService.addEnrollment(actor, adminStudentEnrollmentMatch[1]!, createEnrollmentSchema.parse(req.body))
+      return { statusCode: 201, payload: { success: true, data: result } }
+    }
+
+    const adminStudentEnrollmentUpdateMatch = pathname.match(/^\/api\/admin\/students\/([^/]+)\/enrollments\/([^/]+)$/)
+    if (adminStudentEnrollmentUpdateMatch && method === 'PATCH') {
+      const actor = requireAuth()
+      const result = await studentService.updateEnrollment(actor, adminStudentEnrollmentUpdateMatch[1]!, adminStudentEnrollmentUpdateMatch[2]!, updateEnrollmentSchema.parse(req.body))
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+    const adminStudentMatch = pathname.match(/^\/api\/admin\/students\/([^/]+)$/)
+    if (adminStudentMatch && method === 'PATCH') {
+      const actor = requireAuth()
+      const result = await studentService.updateStudent(actor, adminStudentMatch[1]!, updateStudentSchema.parse(req.body))
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
     if (method === 'GET' && pathname === '/api/students') {
       const actor = requireAuth()
       const { page, pageSize } = paginationSchema.parse(Object.fromEntries(parsedUrl.searchParams))
       const search = parsedUrl.searchParams.get('search') ?? undefined
       const academicYearId = parsedUrl.searchParams.get('academicYearId') ?? undefined
+      const allAcademicYears = parsedUrl.searchParams.get('allAcademicYears') === 'true'
       const talentArea = parsedUrl.searchParams.get('talentArea') ?? undefined
       const advisorName = parsedUrl.searchParams.get('advisorName') ?? undefined
 
       const result = await studentService.listStudents(actor, {
-        page, pageSize, search, academicYearId, talentArea, advisorName,
+        page, pageSize, search, academicYearId, allAcademicYears, talentArea, advisorName,
       })
       return {
         statusCode: 200,
@@ -157,6 +265,66 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       return { statusCode: 200, payload: { success: true, data: years } }
     }
 
+    if (method === 'GET' && pathname === '/api/dashboard/summary') {
+      const actor = requireAuth()
+      const summary = await dashboardService.getSummary(actor)
+      return { statusCode: 200, payload: { success: true, data: summary } }
+    }
+
+    if (method === 'GET' && pathname === '/api/reports/overview') {
+      const actor = requireAuth()
+      const academicYearId = parsedUrl.searchParams.get('academicYearId') || undefined
+      const includeArchived = parsedUrl.searchParams.get('includeArchived') === 'true'
+      const overview = await reportService.getOverview(actor, { academicYearId, includeArchived })
+      return { statusCode: 200, payload: { success: true, data: overview } }
+    }
+
+    if (method === 'GET' && pathname === '/api/reports/students') {
+      const actor = requireAuth()
+      const { page, pageSize } = paginationSchema.parse(Object.fromEntries(parsedUrl.searchParams))
+      const result = await reportService.listStudents(actor, {
+        page, pageSize,
+        academicYearId: parsedUrl.searchParams.get('academicYearId') || undefined,
+        categoryId: parsedUrl.searchParams.get('categoryId') || undefined,
+        search: parsedUrl.searchParams.get('search') || undefined,
+        talentArea: parsedUrl.searchParams.get('talentArea') || undefined,
+        advisorUserId: parsedUrl.searchParams.get('advisorUserId') || undefined,
+        withoutProjects: parsedUrl.searchParams.get('withoutProjects') === 'true',
+        includeArchived: parsedUrl.searchParams.get('includeArchived') === 'true',
+      })
+      return { statusCode: 200, payload: { success: true, data: result.students, pagination: { page, pageSize, total: result.total, totalPages: Math.ceil(result.total / pageSize) } } }
+    }
+
+    if (method === 'GET' && pathname === '/api/reports/teachers') {
+      const actor = requireAuth()
+      const { page, pageSize } = paginationSchema.parse(Object.fromEntries(parsedUrl.searchParams))
+      const result = await reportService.listTeachers(actor, { page, pageSize, academicYearId: parsedUrl.searchParams.get('academicYearId') || undefined, search: parsedUrl.searchParams.get('search') || undefined, includeArchived: parsedUrl.searchParams.get('includeArchived') === 'true' })
+      return { statusCode: 200, payload: { success: true, data: result.teachers, pagination: { page, pageSize, total: result.total, totalPages: Math.ceil(result.total / pageSize) } } }
+    }
+
+    if (method === 'GET' && pathname === '/api/reports/projects') {
+      const actor = requireAuth()
+      const { page, pageSize } = paginationSchema.parse(Object.fromEntries(parsedUrl.searchParams))
+      const participationType = parsedUrl.searchParams.get('participationType') ? z.enum(['INDIVIDUAL', 'TEAM']).parse(parsedUrl.searchParams.get('participationType')) : undefined
+      const result = await reportService.listProjects(actor, { page, pageSize, academicYearId: parsedUrl.searchParams.get('academicYearId') || undefined, categoryId: parsedUrl.searchParams.get('categoryId') || undefined, statusId: parsedUrl.searchParams.get('statusId') || undefined, studentId: parsedUrl.searchParams.get('studentId') || undefined, advisorUserId: parsedUrl.searchParams.get('advisorUserId') || undefined, search: parsedUrl.searchParams.get('search') || undefined, participationType, includeArchived: parsedUrl.searchParams.get('includeArchived') === 'true' })
+      return { statusCode: 200, payload: { success: true, data: result.projects, pagination: { page, pageSize, total: result.total, totalPages: Math.ceil(result.total / pageSize) } } }
+    }
+
+    const teacherReportProjectsMatch = pathname.match(/^\/api\/reports\/teachers\/([^/]+)\/projects$/)
+    if (method === 'GET' && teacherReportProjectsMatch) {
+      const actor = requireAuth()
+      const { page, pageSize } = paginationSchema.parse(Object.fromEntries(parsedUrl.searchParams))
+      const type = z.enum(['created', 'advised']).parse(parsedUrl.searchParams.get('type') ?? 'created')
+      const result = await reportService.listTeacherProjects(actor, teacherReportProjectsMatch[1]!, type, { page, pageSize, academicYearId: parsedUrl.searchParams.get('academicYearId') || undefined, includeArchived: parsedUrl.searchParams.get('includeArchived') === 'true' })
+      return { statusCode: 200, payload: { success: true, data: result.projects, pagination: { page, pageSize, total: result.total, totalPages: Math.ceil(result.total / pageSize) } } }
+    }
+
+    if (method === 'GET' && pathname === '/api/project-options') {
+      const actor = requireAuth()
+      const options = await projectService.listProjectOptions(actor)
+      return { statusCode: 200, payload: { success: true, data: options } }
+    }
+
     if (method === 'GET' && pathname === '/api/academic-years/current') {
       const actor = requireAuth()
       const current = await academicYearService.getCurrentAcademicYear(actor)
@@ -181,10 +349,11 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       const statusId = parsedUrl.searchParams.get('statusId') ?? undefined
       const studentId = parsedUrl.searchParams.get('studentId') ?? undefined
       const advisorUserId = parsedUrl.searchParams.get('advisorUserId') ?? undefined
+      const search = parsedUrl.searchParams.get('search') ?? undefined
       const includeArchived = parsedUrl.searchParams.get('includeArchived') === 'true'
 
       const list = await projectService.listProjects(actor, {
-        academicYearId, categoryId, statusId, studentId, advisorUserId, includeArchived,
+        academicYearId, categoryId, statusId, studentId, advisorUserId, includeArchived, search,
       })
       const paged = list.slice((page - 1) * pageSize, page * pageSize)
       return { statusCode: 200, payload: { success: true, data: paged, pagination: {
@@ -389,6 +558,10 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       }
     }
 
+    if (err instanceof StudentRuleError) {
+      return { statusCode: err.statusCode, payload: { success: false, error: { code: 'BUSINESS_RULE_ERROR', message: err.message } } }
+    }
+
     const status = err instanceof Error && 'statusCode' in err && typeof err.statusCode === 'number' ? err.statusCode : 500
     return {
       statusCode: status,
@@ -453,7 +626,7 @@ export async function dispatchNodeApi(req: IncomingMessage, res: ServerResponse,
     return
   }
 
-  const { statusCode, payload } = await handleApiRequest({
+  const { statusCode, payload, responseHeaders } = await handleApiRequest({
     method: req.method ?? 'GET',
     url: req.url ?? '/',
     headers: req.headers,
@@ -461,6 +634,8 @@ export async function dispatchNodeApi(req: IncomingMessage, res: ServerResponse,
   }, database)
 
   res.statusCode = statusCode
+  const setCookie = responseHeaders?.get('set-cookie')
+  if (setCookie) res.setHeader('Set-Cookie', setCookie)
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(payload))
 }

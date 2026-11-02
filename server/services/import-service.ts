@@ -96,7 +96,7 @@ export class StudentImportService {
             lastName: record.lastName,
             resultTypes: ['INVALID_RECORD'],
             message: record.formulaFields?.length ? 'Formül hücreleri öğrenci verisi olarak kabul edilmez.'
-              : record.invalidFields?.includes('bilsemNo') ? 'BİLSEM numarası Excel hücresinde metin olmalıdır; baştaki sıfırların kaybını önlemek için sayısal değer kabul edilmez.'
+              : record.invalidFields?.includes('bilsemNo') ? 'BİLSEM numarası boşluksuz, yalnızca rakamlardan oluşmalıdır. Sayısal hücrelerde yalnızca tam sayı veya açık sıfır dolgulu biçimler kabul edilir.'
                 : 'Zorunlu alan (BİLSEM no, ad, soyad, yetenek alanı, danışman öğretmen) eksik.',
           })
           continue

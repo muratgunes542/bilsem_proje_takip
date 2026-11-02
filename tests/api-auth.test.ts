@@ -70,6 +70,15 @@ describe('API Auth and Security Enforcement', () => {
     expect(user.password).toBeUndefined()
   })
 
+  it('does not expose credentials in admin user lists and prevents removing the last active administrator', async () => {
+    const list = await handleApiRequest({ method: 'GET', url: '/api/admin/users', headers: { 'x-test-user-id': 'admin-1' } }, db)
+    expect(list.statusCode).toBe(200)
+    expect(JSON.stringify(list.payload.data)).not.toContain('password')
+    const update = await handleApiRequest({ method: 'PATCH', url: '/api/admin/users/admin-1', headers: { 'x-test-user-id': 'admin-1' }, body: { role: 'TEACHER' } }, db)
+    expect(update.statusCode).toBe(422)
+    expect(update.payload.error?.message).toContain('en az bir etkin yönetici')
+  })
+
   it('rejects client spoofing attempts where client sends fake userId or ADMIN role in body', async () => {
     // Teacher attempting to pass spoofed userId and role in request body
     const res = await handleApiRequest({

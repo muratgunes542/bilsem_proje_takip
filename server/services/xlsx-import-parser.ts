@@ -44,6 +44,17 @@ function cellString(cell: ExcelJS.Cell): string | undefined {
   return undefined
 }
 
+function parseBilsemCell(cell: ExcelJS.Cell): { value?: string; invalid: boolean } {
+  const raw = cell.value
+  if (typeof raw === 'string') return { value: raw, invalid: raw.length === 0 || raw.trim() !== raw || !/^\d+$/.test(raw) }
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0) return { invalid: true }
+  const format = String(cell.numFmt ?? 'General').trim()
+  // Only a plain run of zero placeholders has unambiguous zero-padding semantics.
+  if (format !== 'General' && !/^0+$/.test(format)) return { invalid: true }
+  const digits = String(raw)
+  return { value: format === 'General' ? digits : digits.padStart(format.length, '0'), invalid: false }
+}
+
 function validateZipContainer(buffer: Buffer): void {
   const searchStart = Math.max(0, buffer.length - 65_557)
   let endOffset = -1
@@ -146,7 +157,7 @@ export async function parseStudentWorkbook(buffer: Buffer): Promise<{ records: S
       .map(([field]) => field)
     const bilsemColumn = fieldColumns.get('bilsemNo')!
     const bilsemCell = row.getCell(bilsemColumn)
-    const numericBilsemNo = typeof bilsemCell.value === 'number'
+    const parsedBilsemNo = parseBilsemCell(bilsemCell)
     const mappedValues = mappedCells.map(([, cell]) => cellString(cell))
     if (mappedValues.every((value) => value === undefined) && formulaFields.length === 0) {
       warnings.push({ type: 'UNEXPECTED_ROW', rowNumber, value: 'Eşleşen sütunlarda veri yok.' })
@@ -159,13 +170,13 @@ export async function parseStudentWorkbook(buffer: Buffer): Promise<{ records: S
     }
     records.push({
       rowNumber,
-      bilsemNo: numericBilsemNo ? undefined : get('bilsemNo'),
+      bilsemNo: parsedBilsemNo.value,
       firstName: get('firstName'),
       lastName: get('lastName'),
       talentArea: get('talentArea'),
       advisorName: get('advisorName'),
       formulaFields,
-      invalidFields: numericBilsemNo ? ['bilsemNo'] : [],
+      invalidFields: parsedBilsemNo.invalid ? ['bilsemNo'] : [],
     })
   }
 

@@ -28,6 +28,7 @@ export class UserService {
         email: schema.users.email,
         role: schema.users.role,
         isActive: schema.users.isActive,
+        mustChangePassword: schema.users.mustChangePassword,
         createdAt: schema.users.createdAt,
       })
       .from(schema.users)
@@ -73,6 +74,7 @@ export class UserService {
         email: schema.users.email,
         role: schema.users.role,
         isActive: schema.users.isActive,
+        mustChangePassword: schema.users.mustChangePassword,
         createdAt: schema.users.createdAt,
         updatedAt: schema.users.updatedAt,
       })
@@ -112,6 +114,12 @@ export class UserService {
         throw error
       }
 
+      if (existing[0].role === 'ADMIN' && existing[0].isActive && (updates.role === 'TEACHER' || updates.isActive === false)) {
+        const [adminCount] = await transaction.select({ total: count() }).from(schema.users)
+          .where(and(eq(schema.users.role, 'ADMIN'), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
+        if ((adminCount?.total ?? 0) <= 1) throw new UserRuleError('Sistemde en az bir etkin yönetici kalmalıdır.')
+      }
+
       await transaction
         .update(schema.users)
         .set({
@@ -137,12 +145,25 @@ export class UserService {
           email: schema.users.email,
           role: schema.users.role,
           isActive: schema.users.isActive,
+          mustChangePassword: schema.users.mustChangePassword,
           updatedAt: schema.users.updatedAt,
         })
         .from(schema.users)
         .where(eq(schema.users.id, targetUserId))
 
       return updated
+    })
+  }
+
+  async markTeacherMustChangePassword(actor: AuthenticatedUser, targetUserId: string) {
+    if (!canManageAllRecords(actor)) throw new AuthorizationError('Öğretmen hesabı oluşturma yetkiniz yok.')
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.select({ id: schema.users.id, role: schema.users.role }).from(schema.users)
+        .where(and(eq(schema.users.id, targetUserId), isNull(schema.users.deletedAt))).limit(1)
+      if (!rows[0] || rows[0].role !== 'TEACHER') throw new UserRuleError('Oluşturulan hesap öğretmen hesabı olarak bulunamadı.')
+      await transaction.update(schema.users).set({ mustChangePassword: true, updatedAt: new Date() }).where(eq(schema.users.id, targetUserId))
+      await transaction.insert(schema.auditLogs).values({ id: randomUUID(), actorUserId: actor.id, action: 'TEACHER_ACCOUNT_CREATED', entityType: 'USER', entityId: targetUserId, afterJson: JSON.stringify({ role: 'TEACHER', mustChangePassword: true }) })
+      return { id: targetUserId }
     })
   }
 }

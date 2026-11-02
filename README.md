@@ -1,6 +1,6 @@
 # Kurumsal Proje Takip Sistemi
 
-React 19, TypeScript, Vite, Turso/libSQL, Drizzle ORM ve Better Auth tabanlı proje takip altyapısıdır. Bu aşama yalnızca teknik iskelet, veri modeli, migration ve sunucu tarafı yetkilendirmeyi içerir; kullanıcı arayüzü uygulanmamıştır.
+React 19, TypeScript, Vite, Turso/libSQL, Drizzle ORM ve Better Auth tabanlı Ünye BİLSEM proje takip uygulamasıdır. Arayüz oturum, öğrenci/proje, yönetici ve Excel aktarım API'leriyle çalışır.
 
 ## Gereksinimler
 
@@ -15,13 +15,16 @@ npm install
 cp .env.example .env
 ```
 
-`BETTER_AUTH_SECRET` en az 32 karakterlik rastgele bir değer olmalıdır. Üretim ve test ortamları için ayrı veritabanı, auth secret ve URL kullanın. `.env`, `.env.test` ve `.env.production` Git'e dahil edilmez.
+`BETTER_AUTH_SECRET` en az 32 karakterlik rastgele bir değer olmalıdır. Üretim ve test ortamları için ayrı veritabanı, auth secret ve URL kullanın. `.env`, `.env.test` ve `.env.production` Git'e dahil edilmez. İzole yerel veritabanı için `.env` içindeki `TURSO_DATABASE_URL=file:./data/development.db` kullanın; bağlantı hedefini kontrol etmeden migration çalıştırmayın.
 
 ## Komutlar
 
 ```bash
-npm run dev             # Vite geliştirme sunucusu
-npm run dev:api         # Vercel frontend + API geliştirme ortamı
+npm run dev             # Yalnızca Vite frontend
+npx dotenv -e .env -- npm run db:migrate # Yerel geliştirme migration'ları
+npm run dev:local                       # İzole yerel DB ile Vite + API + Better Auth
+npx dotenv -e .env -- npm run dev:api   # Vercel CLI geliştirme ortamı
+npm run db:bootstrap-admin:local        # Mevcut yerel öğretmeni ilk yönetici yapar
 npm run build           # TypeScript kontrolü ve üretim build'i
 npm run typecheck       # Strict TypeScript kontrolü
 npm run lint            # ESLint
@@ -40,11 +43,11 @@ npm run db:migrate:test # .env.test ile test migration'ı
 
 ## Mimari
 
-- `src/`: UI eklenmesine hazır, şu an boş React girişi.
+- `src/`: Türkçe, duyarlı giriş, öğretmen/yönetici panelleri, öğrenci, proje ve Excel aktarım ekranları.
 - `api/auth/[...all].ts`: Vercel üzerinde Better Auth sunucu endpoint'i.
 - `server/db/schema.ts`: 14 iş tablosu ve Better Auth tabloları.
 - `server/authorization.ts`: Sunucu tarafı ADMIN/TEACHER kuralları.
-- `drizzle/development/`: İlk SQL migration ve Drizzle metadata'sı.
+- `drizzle/development/`: Geliştirme SQL migration zinciri.
 - `tests/authorization.test.ts`: Sahiplik, admin, inactive ve audit yetki testleri.
 - `docs/data-model.md`: Veri modeli ve ilişkiler.
 - `docs/backup-restore.md`: Yedekleme/geri yükleme stratejisi.
@@ -57,6 +60,7 @@ npm run db:migrate:test # .env.test ile test migration'ı
 - Silme işlemleri domain tablolarında soft delete'tir. Auth oturum tablolarındaki cascade yalnızca auth yaşam döngüsü içindir.
 - `audit_logs` ve `project_status_history` SQL trigger'larıyla append-only yapılmıştır.
 - Gerçek öğrenci verisi veya seed öğrenci kaydı bulunmaz.
+- `db:bootstrap-admin:local` yalnızca `APP_ENV=development`, `TURSO_DATABASE_URL=file:./data/development.db` ve boş yönetici durumunda çalışır; mevcut etkin öğretmen hesabını etkileşimli onayla yönetici yapar.
 
 ## Migration Akışı
 

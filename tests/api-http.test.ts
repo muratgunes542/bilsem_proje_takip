@@ -151,6 +151,8 @@ describe('HTTP API adapter', () => {
     sheet.addRow(['00008', 'Mükerrer', 'Bir', 'Resim', 'HTTP Teacher', ''])
     sheet.addRow(['00008', 'Mükerrer', 'İki', 'Resim', 'HTTP Teacher', ''])
     sheet.addRow([9, 'Sayısal', 'No', 'Müzik', 'HTTP Teacher', ''])
+    const paddedNumber = sheet.addRow([10, 'Biçimli', 'Sıfır', 'Müzik', 'HTTP Teacher', ''])
+    paddedNumber.getCell(1).numFmt = '00000'
     sheet.addRow(['00009', { formula: '="Formül"', result: 'Formül' }, 'Hücre', 'Müzik', 'HTTP Teacher', ''])
     sheet.addRow(['00005', 'Yeni', 'Öğrenci', 'Müzik', 'HTTP Teacher', ''])
     sheet.addRow(['', '', '', '', '', 'sadece beklenmeyen sütun'])
@@ -162,11 +164,11 @@ describe('HTTP API adapter', () => {
     })
     expect(response.status).toBe(200)
     const preview = await response.json() as { data: { batchId: string; totalRows: number; newStudentCount: number; continuingStudentCount: number; changedCount: number; invalidRows: number; warnings: Array<{ type: string }> } }
-    expect(preview.data.totalRows).toBe(6)
-    expect(preview.data.newStudentCount).toBe(1)
+    expect(preview.data.totalRows).toBe(7)
+    expect(preview.data.newStudentCount).toBe(3)
     expect(preview.data.continuingStudentCount).toBe(1)
     expect(preview.data.changedCount).toBe(1)
-    expect(preview.data.invalidRows).toBe(4)
+    expect(preview.data.invalidRows).toBe(3)
     expect(preview.data.warnings.map((warning) => warning.type)).toContain('UNEXPECTED_COLUMN')
     expect(preview.data.warnings.map((warning) => warning.type)).toContain('UNEXPECTED_ROW')
     expect((await db.select().from(schema.students))).toHaveLength(2)
@@ -186,6 +188,8 @@ describe('HTTP API adapter', () => {
     expect((await db.select().from(schema.projectStudents)).map((member) => member.projectId)).toContain('past-project')
     expect((await db.select().from(schema.students)).map((student) => student.bilsemNo)).not.toContain('00008')
     expect((await db.select().from(schema.students)).map((student) => student.bilsemNo)).toContain('00005')
+    expect((await db.select().from(schema.students)).map((student) => student.bilsemNo)).toContain('9')
+    expect((await db.select().from(schema.students)).map((student) => student.bilsemNo)).toContain('00010')
   })
 
   it('rejects unexpected MIME types and requests beyond the configured upload limit', async () => {

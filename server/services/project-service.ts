@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, eq, inArray, isNull, like, ne } from 'drizzle-orm'
 import type { LibSQLDatabase } from 'drizzle-orm/libsql'
 import { assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization'
 import * as schema from '../db/schema'
@@ -34,6 +34,7 @@ export type ListProjectsFilters = {
   studentId?: string
   advisorUserId?: string
   includeArchived?: boolean
+  search?: string
 }
 
 export class ProjectRuleError extends Error {
@@ -47,6 +48,32 @@ export class ProjectRuleError extends Error {
 
 export class ProjectService {
   constructor(private readonly database: AppDatabase) {}
+
+  async listProjectOptions(actor: AuthenticatedUser) {
+    if (!actor?.isActive || !['ADMIN', 'TEACHER'].includes(actor.role)) throw new AuthorizationError()
+    const [categories, statuses, teachers] = await Promise.all([
+      this.database.select({
+        id: schema.projectCategories.id,
+        code: schema.projectCategories.code,
+        name: schema.projectCategories.name,
+        duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled,
+      }).from(schema.projectCategories)
+        .where(and(eq(schema.projectCategories.isActive, true), isNull(schema.projectCategories.deletedAt)))
+        .orderBy(schema.projectCategories.name),
+      this.database.select({
+        id: schema.projectStatuses.id,
+        code: schema.projectStatuses.code,
+        name: schema.projectStatuses.name,
+        isTerminal: schema.projectStatuses.isTerminal,
+      }).from(schema.projectStatuses)
+        .where(isNull(schema.projectStatuses.deletedAt))
+        .orderBy(schema.projectStatuses.sortOrder),
+      this.database.select({ id: schema.users.id, name: schema.users.name }).from(schema.users)
+        .where(and(eq(schema.users.role, 'TEACHER'), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
+        .orderBy(schema.users.name),
+    ])
+    return { categories, statuses, teachers }
+  }
 
   async listProjects(actor: AuthenticatedUser, filters: ListProjectsFilters = {}) {
     if (!actor || !actor.isActive) throw new AuthorizationError()
@@ -69,6 +96,8 @@ export class ProjectService {
     if (filters.statusId) {
       conditions.push(eq(schema.projects.statusId, filters.statusId))
     }
+
+    if (filters.search?.trim()) conditions.push(like(schema.projects.title, `%${filters.search.trim()}%`))
 
     if (filters.studentId) {
       const studentProjectRows = await this.database
@@ -127,11 +156,23 @@ export class ProjectService {
       .innerJoin(schema.projectStatuses, eq(schema.projectStatuses.id, schema.projects.statusId))
       .innerJoin(schema.users, eq(schema.users.id, schema.projects.createdBy))
 
-    if (conditions.length > 0) {
-      return baseQuery.where(and(...conditions))
-    }
-
-    return baseQuery
+    const projects = conditions.length > 0 ? await baseQuery.where(and(...conditions)) : await baseQuery
+    if (!projects.length) return projects
+    const ids = projects.map((project) => project.id)
+    const [members, advisors] = await Promise.all([
+      this.database.select({ projectId: schema.projectStudents.projectId, name: schema.students.firstName, surname: schema.students.lastName })
+        .from(schema.projectStudents).innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+        .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
+        .where(and(inArray(schema.projectStudents.projectId, ids), isNull(schema.projectStudents.deletedAt))),
+      this.database.select({ projectId: schema.projectAdvisors.projectId, name: schema.users.name })
+        .from(schema.projectAdvisors).innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+        .where(and(inArray(schema.projectAdvisors.projectId, ids), isNull(schema.projectAdvisors.deletedAt))),
+    ])
+    return projects.map((project) => ({
+      ...project,
+      students: members.filter((member) => member.projectId === project.id).map((member) => `${member.name} ${member.surname}`),
+      advisors: advisors.filter((advisor) => advisor.projectId === project.id).map((advisor) => advisor.name),
+    }))
   }
 
   async getProjectDetail(actor: AuthenticatedUser, projectId: string) {
