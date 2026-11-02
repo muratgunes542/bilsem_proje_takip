@@ -22,6 +22,11 @@ export type PromoteAdminResult = {
 }
 
 export type PromoteAdminTestHooks = {
+  simulateBetterAuthFailure?: boolean
+  simulateUserUpdateFailure?: boolean
+  simulateAuditLogFailure?: boolean
+  simulateSessionDeletionFailure?: boolean
+  simulateRollbackFailure?: boolean
   simulateRoleUpdateFailure?: boolean
 }
 
@@ -76,7 +81,11 @@ export async function promoteProductionAdmin(
       }
     } catch (error) {
       // Rollback role on error
-      await database.update(schema.users).set({ role: existing.role }).where(eq(schema.users.id, existing.id))
+      try {
+        await database.update(schema.users).set({ role: existing.role }).where(eq(schema.users.id, existing.id))
+      } catch (rollbackErr) {
+        console.error('Role rollback failed:', rollbackErr)
+      }
       throw new Error(`Kullanıcı yükseltme işlemi başarısız oldu ve tüm değişiklikler geri alındı: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`, { cause: error })
     }
   } else {
@@ -92,6 +101,10 @@ export async function promoteProductionAdmin(
     let createdUserId = ''
 
     try {
+      if (hooks?.simulateBetterAuthFailure) {
+        throw new Error('Simulated Better Auth sign up failure')
+      }
+
       const created = await authInstance.api.signUpEmail({
         body: { name: params.name?.trim() || 'Sistem Yöneticisi', email, password: tempPassword },
       })
@@ -123,9 +136,13 @@ export async function promoteProductionAdmin(
     } catch (error) {
       // ATOMIC ROLLBACK: Remove half-created user if role/audit update fails
       if (createdUserId) {
-        await database.delete(schema.sessions).where(eq(schema.sessions.userId, createdUserId))
-        await database.delete(schema.accounts).where(eq(schema.accounts.userId, createdUserId))
-        await database.delete(schema.users).where(eq(schema.users.id, createdUserId))
+        try {
+          await database.delete(schema.sessions).where(eq(schema.sessions.userId, createdUserId))
+          await database.delete(schema.accounts).where(eq(schema.accounts.userId, createdUserId))
+          await database.delete(schema.users).where(eq(schema.users.id, createdUserId))
+        } catch (rollbackErr) {
+          console.error('Cleanup rollback failed:', rollbackErr)
+        }
       }
       throw new Error(`Yeni yönetici oluşturma işlemi başarısız oldu ve tüm kayıtlar temizlendi: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`, { cause: error })
     }
@@ -176,6 +193,10 @@ export async function resetTeacherPasswordByAdmin(
   const tempPassword = `${randomBytes(24).toString('base64url')}aA7!`
 
   try {
+    if (hooks?.simulateBetterAuthFailure) {
+      throw new Error('Simulated Better Auth reset password failure')
+    }
+
     await authInstance.api.requestPasswordReset({
       body: { email, redirectTo: 'http://localhost' },
     })
@@ -191,9 +212,19 @@ export async function resetTeacherPasswordByAdmin(
     }
 
     await database.transaction(async (tx) => {
-      // Revoke all existing sessions for this user on password reset
+      if (hooks?.simulateSessionDeletionFailure) {
+        throw new Error('Simulated session deletion failure')
+      }
       await tx.delete(schema.sessions).where(eq(schema.sessions.userId, existing.id))
+
+      if (hooks?.simulateUserUpdateFailure) {
+        throw new Error('Simulated user update failure')
+      }
       await tx.update(schema.users).set({ mustChangePassword: true, updatedAt: new Date() }).where(eq(schema.users.id, existing.id))
+
+      if (hooks?.simulateAuditLogFailure) {
+        throw new Error('Simulated audit log failure')
+      }
       await tx.insert(schema.auditLogs).values({
         id: randomUUID(), actorUserId: params.actorUserId, action: 'TEACHER_PASSWORD_RESET_BY_ADMIN',
         entityType: 'USER', entityId: existing.id, afterJson: JSON.stringify({ email }),
@@ -209,12 +240,19 @@ export async function resetTeacherPasswordByAdmin(
     }
   } catch (error) {
     // ATOMIC ROLLBACK: Restore original password hash and user state if any step failed
-    if (originalAccount?.password) {
-      await database.update(schema.accounts).set({ password: originalAccount.password })
-        .where(and(eq(schema.accounts.userId, existing.id), eq(schema.accounts.providerId, 'credential')))
+    try {
+      if (hooks?.simulateRollbackFailure) {
+        throw new Error('Simulated secondary rollback failure', { cause: error })
+      }
+      if (originalAccount?.password) {
+        await database.update(schema.accounts).set({ password: originalAccount.password })
+          .where(and(eq(schema.accounts.userId, existing.id), eq(schema.accounts.providerId, 'credential')))
+      }
+      await database.update(schema.users).set({ mustChangePassword: existing.mustChangePassword })
+        .where(eq(schema.users.id, existing.id))
+    } catch (rollbackErr) {
+      console.error('Password reset rollback failed:', rollbackErr)
     }
-    await database.update(schema.users).set({ mustChangePassword: existing.mustChangePassword })
-      .where(eq(schema.users.id, existing.id))
 
     throw new Error(`Parola sıfırlama işlemi başarısız oldu ve tüm değişiklikler geri alındı: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`, { cause: error })
   }

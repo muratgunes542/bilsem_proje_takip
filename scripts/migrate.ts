@@ -1,7 +1,7 @@
 import { migrate } from 'drizzle-orm/libsql/migrator'
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
-import { client, db } from '../server/db/client'
+import { db } from '../server/db/client'
 import { env } from '../server/env'
 
 export type MigrationValidationOptions = {
@@ -58,11 +58,9 @@ async function run() {
   console.log(`Migration completed for ${env.APP_ENV}.`)
 }
 
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.MIGRATE_RUN === 'true' || process.env.NODE_ENV !== 'test') {
   run().catch((err) => {
     console.error(err instanceof Error ? err.message : err)
-    process.exitCode = 1
-  }).finally(() => {
-    client.close()
+    process.exit(1)
   })
 }

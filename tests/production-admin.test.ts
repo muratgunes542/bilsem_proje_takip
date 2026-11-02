@@ -10,12 +10,12 @@ import { createAuth } from '../server/auth'
 import { promoteProductionAdmin, resetTeacherPasswordByAdmin } from '../server/services/admin-promotion'
 import * as schema from '../server/db/schema'
 
-describe('V1.8.3.4 Production Admin, Promotion, Password Reset & Security Tests', () => {
+describe('V1.8.3.5 Production Admin, Promotion, Password Reset & Security Tests', () => {
   let client: Client
   let db: ReturnType<typeof drizzle<typeof schema>>
 
   beforeEach(async () => {
-    client = createClient({ url: `file:${join(tmpdir(), `prod-v1834-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)}` })
+    client = createClient({ url: `file:${join(tmpdir(), `prod-v1835-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)}` })
     db = drizzle(client, { schema })
     await migrate(db, { migrationsFolder: 'drizzle/test' })
 
@@ -144,26 +144,66 @@ describe('V1.8.3.4 Production Admin, Promotion, Password Reset & Security Tests'
     expect(activeSessions).toHaveLength(0)
   })
 
-  it('8. Ensures atomic rollback when password reset fails (old password continues to work)', async () => {
+  it('8a. Ensures atomic rollback when Better Auth password reset fails (old password & session preserved)', async () => {
     const authInstance = createAuth(db, false)
-    const email = 'rollback.reset@example.test'
+    const email = 'rollback.ba@example.test'
     const originalPassword = 'OriginalPass123!'
 
     const created = await authInstance.api.signUpEmail({
-      body: { name: 'Rollback Teacher', email, password: originalPassword },
+      body: { name: 'Rollback Teacher BA', email, password: originalPassword },
     })
 
-    // Simulate failure during audit/transaction
     await expect(resetTeacherPasswordByAdmin(db, {
       email,
       actorUserId: 'admin-actor-1',
-    }, { simulateRoleUpdateFailure: true })).rejects.toThrow()
+    }, { simulateBetterAuthFailure: true })).rejects.toThrow()
 
-    // Original password STILL WORKS because changes were rolled back
+    // Original password STILL WORKS
     const signIn = await authInstance.api.signInEmail({
       body: { email, password: originalPassword },
     })
     expect(signIn.user.id).toBe(created.user.id)
+  })
+
+  it('8b. Ensures atomic rollback when user update or audit log fails (old password & session preserved)', async () => {
+    const authInstance = createAuth(db, false)
+    const email = 'rollback.audit@example.test'
+    const originalPassword = 'OriginalPass123!'
+
+    const created = await authInstance.api.signUpEmail({
+      body: { name: 'Rollback Teacher Audit', email, password: originalPassword },
+    })
+
+    const sessionToken = randomUUID()
+    await db.insert(schema.sessions).values({
+      id: randomUUID(), userId: created.user.id, token: sessionToken, expiresAt: new Date(Date.now() + 3600000),
+    })
+
+    await expect(resetTeacherPasswordByAdmin(db, {
+      email,
+      actorUserId: 'admin-actor-1',
+    }, { simulateAuditLogFailure: true })).rejects.toThrow()
+
+    // Original password STILL WORKS
+    const signIn = await authInstance.api.signInEmail({
+      body: { email, password: originalPassword },
+    })
+    expect(signIn.user.id).toBe(created.user.id)
+  })
+
+  it('8c. Handles secondary rollback errors gracefully without swallowing primary error', async () => {
+    const authInstance = createAuth(db, false)
+    const email = 'rollback.secondary@example.test'
+    const originalPassword = 'OriginalPass123!'
+
+    await authInstance.api.signUpEmail({
+      body: { name: 'Secondary Rollback Teacher', email, password: originalPassword },
+    })
+
+    await expect(resetTeacherPasswordByAdmin(db, {
+      email,
+      actorUserId: 'admin-actor-1',
+    }, { simulateRoleUpdateFailure: true, simulateRollbackFailure: true })).rejects.toThrow('Parola sıfırlama işlemi başarısız oldu')
   })
 
   it('9. Ensures audit logs never contain plain text temporary passwords or sensitive tokens', async () => {
