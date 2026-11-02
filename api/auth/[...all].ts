@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toNodeHandler } from 'better-auth/node'
-import { auth } from '../../server/auth'
+import { auth } from '../../server/auth.js'
 
 const nodeHandler = toNodeHandler(auth)
 
