@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { db } from './db/client.js'
-import * as schema from './db/schema.js'
-import { env, trustedOrigins } from './env.js'
+import { db } from './db/client'
+import * as schema from './db/schema'
+import { env, trustedOrigins } from './env'
 
 export function createAuth(database: typeof db = db, autoSignIn = true) {
 return betterAuth({
