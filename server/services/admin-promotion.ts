@@ -152,6 +152,7 @@ export async function promoteProductionAdmin(
 export type ResetPasswordParams = {
   email: string
   actorUserId: string
+  auditAction?: 'TEACHER_PASSWORD_RESET_BY_ADMIN' | 'ADMIN_PASSWORD_RESET'
 }
 
 export type ResetPasswordResult = {
@@ -226,7 +227,9 @@ export async function resetTeacherPasswordByAdmin(
         throw new Error('Simulated audit log failure')
       }
       await tx.insert(schema.auditLogs).values({
-        id: randomUUID(), actorUserId: params.actorUserId, action: 'TEACHER_PASSWORD_RESET_BY_ADMIN',
+        id: randomUUID(),
+        actorUserId: params.actorUserId,
+        action: params.auditAction ?? 'TEACHER_PASSWORD_RESET_BY_ADMIN',
         entityType: 'USER', entityId: existing.id, afterJson: JSON.stringify({ email }),
       })
     })
