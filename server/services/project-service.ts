@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, isNull, like, ne } from 'drizzle-orm'
 import type { LibSQLDatabase } from 'drizzle-orm/libsql'
-import { assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization'
-import * as schema from '../db/schema'
+import { assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization.js'
+import * as schema from '../db/schema.js'
 
 export type AppDatabase = LibSQLDatabase<typeof schema>
 

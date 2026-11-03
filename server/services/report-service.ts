@@ -1,7 +1,7 @@
 import { and, count, countDistinct, desc, eq, inArray, isNull, like, notInArray, or, sql } from 'drizzle-orm'
-import { AuthorizationError, type AuthenticatedUser } from '../authorization'
-import * as schema from '../db/schema'
-import type { AppDatabase } from './project-service'
+import { AuthorizationError, type AuthenticatedUser } from '../authorization.js'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from './project-service.js'
 
 type ReportFilters = { academicYearId?: string; includeArchived?: boolean }
 type PageFilters = ReportFilters & { page?: number; pageSize?: number; search?: string; talentArea?: string; advisorUserId?: string; withoutProjects?: boolean; categoryId?: string; statusId?: string; participationType?: 'INDIVIDUAL' | 'TEAM'; studentId?: string }

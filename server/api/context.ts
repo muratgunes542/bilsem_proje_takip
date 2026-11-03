@@ -1,12 +1,12 @@
 import type { IncomingMessage } from 'node:http'
 import { and, eq, isNull } from 'drizzle-orm'
-import { auth } from '../auth'
-import { db } from '../db/client'
-import { env } from '../env'
-import type { UserRole } from '../db/schema'
-import * as schema from '../db/schema'
-import type { AppDatabase } from '../services/project-service'
-import type { ApiContextUser } from './types'
+import { auth } from '../auth.js'
+import { db } from '../db/client.js'
+import { env } from '../env.js'
+import type { UserRole } from '../db/schema.js'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from '../services/project-service.js'
+import type { ApiContextUser } from './types.js'
 
 export async function getAuthenticatedApiUser(
   req: IncomingMessage | Request | { headers: Headers | Record<string, string | string[] | undefined> },

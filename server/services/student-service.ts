@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { and, asc, count, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm'
-import { AuthorizationError, canViewStudents, ResourceNotFoundError, type AuthenticatedUser } from '../authorization'
-import * as schema from '../db/schema'
-import type { AppDatabase } from './project-service'
+import { AuthorizationError, canViewStudents, ResourceNotFoundError, type AuthenticatedUser } from '../authorization.js'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from './project-service.js'
 
 export type ListStudentsOptions = {
   page?: number

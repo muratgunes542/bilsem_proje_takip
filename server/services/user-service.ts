@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { and, count, eq, isNull, like, or } from 'drizzle-orm'
-import { AuthorizationError, canManageAllRecords, type AuthenticatedUser } from '../authorization'
-import * as schema from '../db/schema'
-import type { AppDatabase } from './project-service'
+import { AuthorizationError, canManageAllRecords, type AuthenticatedUser } from '../authorization.js'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from './project-service.js'
 
 export class UserRuleError extends Error {
   readonly statusCode = 422

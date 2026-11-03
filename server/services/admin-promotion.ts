@@ -2,8 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, isNull } from 'drizzle-orm'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import * as schema from '../db/schema'
-import type { AppDatabase } from './project-service'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from './project-service.js'
 
 export type PromoteAdminParams = {
   email: string
