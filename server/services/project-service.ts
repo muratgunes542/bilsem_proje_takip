@@ -440,6 +440,33 @@ export class ProjectService {
     })
   }
 
+  async deleteProject(actor: AuthenticatedUser, projectId: string) {
+    if (!actor || !actor.isActive) throw new AuthorizationError()
+    return this.database.transaction(async (transaction) => {
+      const project = await this.getProject(transaction, projectId, true)
+      if (actor.role !== 'ADMIN' && project.createdBy !== actor.id) {
+        throw new AuthorizationError('Bu projeyi silme yetkiniz yok.', 403)
+      }
+
+      await transaction.delete(schema.projectStudents).where(eq(schema.projectStudents.projectId, projectId))
+      await transaction.delete(schema.projectAdvisors).where(eq(schema.projectAdvisors.projectId, projectId))
+      await transaction.delete(schema.projectStatusHistory).where(eq(schema.projectStatusHistory.projectId, projectId))
+      await transaction.delete(schema.projectDuplicateClaims).where(eq(schema.projectDuplicateClaims.projectId, projectId))
+      await transaction.delete(schema.projectAttachments).where(eq(schema.projectAttachments.projectId, projectId))
+      await transaction.delete(schema.notifications).where(eq(schema.notifications.projectId, projectId))
+      await transaction.delete(schema.projects).where(eq(schema.projects.id, projectId))
+
+      await transaction.insert(schema.auditLogs).values({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        action: 'PROJECT_DELETE',
+        entityType: 'PROJECT',
+        entityId: projectId,
+        beforeJson: JSON.stringify(project),
+      })
+    })
+  }
+
   async addTeamMember(actor: AuthenticatedUser, projectId: string, enrollmentId: string) {
     return this.changeTeamMember(actor, projectId, enrollmentId, 'ADD')
   }

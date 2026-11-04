@@ -430,8 +430,8 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       }
 
       if (method === 'DELETE') {
-        await projectService.archiveProject(actor, projectId)
-        return { statusCode: 200, payload: { success: true, data: { message: 'Proje arşivlendi.' } } }
+        await projectService.deleteProject(actor, projectId)
+        return { statusCode: 200, payload: { success: true, data: { message: 'Proje kalıcı olarak silindi.' } } }
       }
     }
 
