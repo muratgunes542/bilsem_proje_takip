@@ -5,12 +5,24 @@ import { db } from './db/client.js'
 import * as schema from './db/schema.js'
 import { env, trustedOrigins } from './env.js'
 
+
 export function createAuth(database: typeof db = db, autoSignIn = true) {
-return betterAuth({
-  appName: 'Kurumsal Proje Takip Sistemi',
-  baseURL: env.BETTER_AUTH_URL,
-  secret: env.BETTER_AUTH_SECRET,
-  trustedOrigins,
+  const vercelPreviewOrigin =
+    process.env.VERCEL_ENV === 'preview' && process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : undefined
+
+  const authBaseURL = vercelPreviewOrigin ?? env.BETTER_AUTH_URL
+
+  const authTrustedOrigins = vercelPreviewOrigin
+    ? [...new Set([...trustedOrigins, vercelPreviewOrigin])]
+    : trustedOrigins
+
+  return betterAuth({
+    appName: 'Kurumsal Proje Takip Sistemi',
+    baseURL: authBaseURL,
+    secret: env.BETTER_AUTH_SECRET,
+    trustedOrigins: authTrustedOrigins,
   database: drizzleAdapter(database, {
     provider: 'sqlite',
     schema,
