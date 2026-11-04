@@ -9,6 +9,31 @@ export default async function handler(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
+  const incomingUrl = new URL(req.url ?? '/', 'http://localhost')
+  const forwardedPath = incomingUrl.searchParams.get('__path')
+
+  if (forwardedPath !== null) {
+    const normalizedPath = forwardedPath.replace(/^\/+/, '')
+
+    if (
+      !normalizedPath ||
+      normalizedPath.split('/').some(
+        segment => segment === '.' || segment === '..',
+      )
+    ) {
+      res.statusCode = 400
+      res.end('Invalid API path')
+      return
+    }
+
+    const searchParams = new URLSearchParams(incomingUrl.searchParams)
+    searchParams.delete('__path')
+
+    req.url = `/api/${normalizedPath}${
+      searchParams.size > 0 ? `?${searchParams.toString()}` : ''
+    }`
+  }
+
   const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
 
   if (pathname.startsWith('/api/auth/')) {
