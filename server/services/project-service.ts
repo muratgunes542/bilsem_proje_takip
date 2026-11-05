@@ -511,6 +511,14 @@ export class ProjectService {
         }
         await transaction.update(schema.projectStudents).set({ deletedAt: new Date(), deletedBy: actor.id, updatedAt: new Date() })
           .where(and(eq(schema.projectStudents.projectId, projectId), eq(schema.projectStudents.enrollmentId, enrollmentId)))
+
+        await transaction.delete(schema.projectDuplicateClaims)
+          .where(and(
+            eq(schema.projectDuplicateClaims.projectId, projectId),
+            eq(schema.projectDuplicateClaims.studentId, enrollment[0].studentId),
+            eq(schema.projectDuplicateClaims.academicYearId, project.academicYearId),
+            eq(schema.projectDuplicateClaims.categoryId, project.categoryId),
+          ))
       }
 
       let memberConflict: { projectId: string; title: string; ownerId: string; ownerName: string } | undefined

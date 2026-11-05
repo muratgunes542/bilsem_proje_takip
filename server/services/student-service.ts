@@ -136,13 +136,8 @@ export class StudentService {
     }
 
     if (options.search?.trim()) {
-      const term = `%${options.search.trim()}%`
-      conditions.push(or(
-        like(schema.students.firstName, term),
-        like(schema.students.lastName, term),
-        like(sql`${schema.students.firstName} || ' ' || ${schema.students.lastName}`, term),
-        like(schema.students.bilsemNo, term),
-      )!)
+      const searchConds = buildTurkishSearchConditions(options.search)
+      if (searchConds) conditions.push(searchConds)
     }
 
     const whereClause = and(...conditions)
@@ -277,4 +272,32 @@ export class StudentService {
       advisors: advisorRows.filter((advisor) => advisor.projectId === project.projectId),
     }))
   }
+}
+
+export function buildTurkishSearchConditions(searchQuery: string) {
+  const term = searchQuery.trim()
+  if (!term) return undefined
+
+  const normalizedTerm = term.toLocaleLowerCase('tr-TR')
+    .replace(/ç/g, 'c')
+    .replace(/ğ/g, 'g')
+    .replace(/ı/g, 'i')
+    .replace(/İ/g, 'i')
+    .replace(/i/g, 'i')
+    .replace(/ö/g, 'o')
+    .replace(/ş/g, 's')
+    .replace(/ü/g, 'u')
+
+  const pattern = `%${normalizedTerm}%`
+
+  const firstNameNorm = sql`lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(${schema.students.firstName}, 'Ç', 'c'), 'ç', 'c'), 'Ğ', 'g'), 'ğ', 'g'), 'İ', 'i'), 'I', 'i'), 'ı', 'i'), 'Ö', 'o'), 'ö', 'o'), 'Ş', 's'), 'ş', 's'), 'Ü', 'u'), 'ü', 'u'))`
+  const lastNameNorm = sql`lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(${schema.students.lastName}, 'Ç', 'c'), 'ç', 'c'), 'Ğ', 'g'), 'ğ', 'g'), 'İ', 'i'), 'I', 'i'), 'ı', 'i'), 'Ö', 'o'), 'ö', 'o'), 'Ş', 's'), 'ş', 's'), 'Ü', 'u'), 'ü', 'u'))`
+  const fullNameNorm = sql`lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(${schema.students.firstName} || ' ' || ${schema.students.lastName}, 'Ç', 'c'), 'ç', 'c'), 'Ğ', 'g'), 'ğ', 'g'), 'İ', 'i'), 'I', 'i'), 'ı', 'i'), 'Ö', 'o'), 'ö', 'o'), 'Ş', 's'), 'ş', 's'), 'Ü', 'u'), 'ü', 'u'))`
+
+  return or(
+    like(firstNameNorm, pattern),
+    like(lastNameNorm, pattern),
+    like(schema.students.bilsemNo, pattern),
+    like(fullNameNorm, pattern),
+  )
 }
