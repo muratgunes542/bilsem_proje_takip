@@ -50,6 +50,15 @@ const addTeamMemberSchema = z.object({
   enrollmentId: z.string().min(1, 'Öğrenci kayıt ID zorunludur.'),
 })
 
+const convertToTeamSchema = z.object({
+  teamName: z.string().trim().max(100, 'Takım adı en fazla 100 karakter olabilir.').nullable().optional(),
+  additionalEnrollmentIds: z.array(z.string().trim().min(1, 'Geçersiz öğrenci ID')).min(1, 'En az bir ek öğrenci seçilmelidir.').max(50, 'En fazla 50 öğrenci eklenebilir.'),
+})
+
+const convertToIndividualSchema = z.object({
+  selectedEnrollmentId: z.string().trim().min(1, 'Bireysel projede kalacak öğrenci seçilmelidir.'),
+})
+
 const updateUserSchema = z.object({
   role: z.enum(['ADMIN', 'TEACHER']).optional(),
   isActive: z.boolean().optional(),
@@ -421,6 +430,24 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       const projectId = removeTeamMemberMatch[1]!
       const enrollmentId = removeTeamMemberMatch[2]!
       const result = await projectService.removeTeamMember(actor, projectId, enrollmentId)
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+    const convertToTeamMatch = pathname.match(/^\/api\/projects\/([^/]+)\/convert-to-team$/)
+    if (method === 'POST' && convertToTeamMatch) {
+      const actor = requireAuth()
+      const projectId = convertToTeamMatch[1]!
+      const body = convertToTeamSchema.parse(req.body)
+      const result = await projectService.convertToTeam(actor, projectId, body)
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+    const convertToIndividualMatch = pathname.match(/^\/api\/projects\/([^/]+)\/convert-to-individual$/)
+    if (method === 'POST' && convertToIndividualMatch) {
+      const actor = requireAuth()
+      const projectId = convertToIndividualMatch[1]!
+      const body = convertToIndividualSchema.parse(req.body)
+      const result = await projectService.convertToIndividual(actor, projectId, body)
       return { statusCode: 200, payload: { success: true, data: result } }
     }
 
