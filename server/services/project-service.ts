@@ -587,6 +587,228 @@ export class ProjectService {
     })
   }
 
+  async convertToTeam(actor: AuthenticatedUser, projectId: string, input: { teamName?: string | null; additionalEnrollmentIds: string[] }) {
+    if (!actor || !actor.isActive) throw new AuthorizationError()
+
+    const trimmedIds = input.additionalEnrollmentIds.map((id) => id.trim()).filter(Boolean)
+    if (trimmedIds.length === 0) {
+      throw new ProjectRuleError('En az bir ek öğrenci seçilmelidir.')
+    }
+    const uniqueAdditionalIds = [...new Set(trimmedIds)]
+    if (uniqueAdditionalIds.length !== input.additionalEnrollmentIds.length) {
+      throw new ProjectRuleError('Tekrar eden öğrenci seçimi yapılamaz.')
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const project = await this.getProject(transaction, projectId)
+      assertCanModifyProject(actor, project)
+
+      if (project.participationType === 'TEAM') {
+        throw new ProjectRuleError('Proje zaten takım projesidir.')
+      }
+
+      const currentMembers = await transaction.select({ enrollmentId: schema.projectStudents.enrollmentId })
+        .from(schema.projectStudents)
+        .where(and(eq(schema.projectStudents.projectId, projectId), isNull(schema.projectStudents.deletedAt)))
+
+      const existingEnrollmentIds = new Set(currentMembers.map((m) => m.enrollmentId))
+      for (const id of uniqueAdditionalIds) {
+        if (existingEnrollmentIds.has(id)) {
+          throw new ProjectRuleError('Aynı öğrenci projeye ikinci kez eklenemez.')
+        }
+      }
+
+      const totalMembersCount = currentMembers.length + uniqueAdditionalIds.length
+      if (totalMembersCount < 2) {
+        throw new ProjectRuleError('Takım projesine dönüştürmek için en az bir ek öğrenci seçilmelidir (toplam en az iki öğrenci).')
+      }
+
+      const enrollmentRows = await transaction
+        .select({
+          enrollmentId: schema.studentEnrollments.id,
+          academicYearId: schema.studentEnrollments.academicYearId,
+          isActive: schema.studentEnrollments.isActive,
+          studentId: schema.students.id,
+          bilsemNo: schema.students.bilsemNo,
+        })
+        .from(schema.studentEnrollments)
+        .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
+        .where(and(inArray(schema.studentEnrollments.id, uniqueAdditionalIds), isNull(schema.studentEnrollments.deletedAt)))
+
+      if (enrollmentRows.length !== uniqueAdditionalIds.length) {
+        throw new ProjectRuleError('Bir veya daha fazla öğrenci kaydı bulunamadı.')
+      }
+
+      if (enrollmentRows.some((row) => !row.isActive || row.academicYearId !== project.academicYearId)) {
+        throw new ProjectRuleError('Öğrenciler yalnızca projenin akademik yılındaki aktif kayıtlardan seçilebilir.')
+      }
+
+      const teamName = input.teamName?.trim() || null
+      await transaction.update(schema.projects).set({
+        participationType: 'TEAM',
+        teamName,
+        updatedAt: new Date(),
+      }).where(eq(schema.projects.id, projectId))
+
+      for (const enrollmentId of uniqueAdditionalIds) {
+        await transaction.insert(schema.projectStudents).values({ projectId, enrollmentId }).onConflictDoUpdate({
+          target: [schema.projectStudents.projectId, schema.projectStudents.enrollmentId],
+          set: { deletedAt: null, deletedBy: null, updatedAt: new Date() },
+        })
+      }
+
+      const conflicts: ProjectConflict[] = []
+      const category = await transaction.select({
+        enabled: schema.projectCategories.duplicateCheckEnabled,
+        duplicateRule: schema.projectCategories.duplicateRule,
+      }).from(schema.projectCategories).where(eq(schema.projectCategories.id, project.categoryId)).limit(1)
+
+      if (category[0]?.enabled && category[0].duplicateRule === 'ACADEMIC_YEAR_STUDENT_CATEGORY') {
+        for (const enrollment of enrollmentRows) {
+          await transaction.insert(schema.projectDuplicateClaims).values({
+            academicYearId: project.academicYearId,
+            studentId: enrollment.studentId,
+            categoryId: project.categoryId,
+            projectId,
+          }).onConflictDoNothing()
+
+          const conflictRows = await transaction.select({
+            projectId: schema.projects.id,
+            title: schema.projects.title,
+            status: schema.projectStatuses.name,
+            ownerId: schema.users.id,
+            ownerName: schema.users.name,
+          }).from(schema.projectDuplicateClaims)
+            .innerJoin(schema.projects, eq(schema.projects.id, schema.projectDuplicateClaims.projectId))
+            .innerJoin(schema.projectStatuses, eq(schema.projectStatuses.id, schema.projects.statusId))
+            .innerJoin(schema.users, eq(schema.users.id, schema.projects.createdBy))
+            .where(and(
+              eq(schema.projectDuplicateClaims.academicYearId, project.academicYearId),
+              eq(schema.projectDuplicateClaims.studentId, enrollment.studentId),
+              eq(schema.projectDuplicateClaims.categoryId, project.categoryId),
+              ne(schema.projectDuplicateClaims.projectId, projectId),
+            )).limit(1)
+
+          if (conflictRows[0]) {
+            conflicts.push({
+              studentId: enrollment.studentId,
+              bilsemNo: enrollment.bilsemNo,
+              ...conflictRows[0],
+            })
+          }
+        }
+      }
+
+      const submitted = project.statusCode !== 'DRAFT'
+      const addedRecipients = new Set([project.createdBy])
+      await transaction.insert(schema.notifications).values([...addedRecipients].map((recipientId) => ({
+        id: randomUUID(),
+        recipientId,
+        projectId,
+        type: 'TEAM_MEMBER_ADDED' as const,
+        title: 'Takım üyeleri eklendi',
+        message: submitted
+          ? 'Başvurusu yapılmış proje takım çalışmasına dönüştürüldü ve yeni üyeler eklendi; kayıt incelemelidir.'
+          : 'Proje takım çalışmasına dönüştürüldü ve yeni üyeler eklendi.',
+      })))
+
+      for (const conflict of conflicts) {
+        const conflictRecipients = new Set([actor.id, conflict.ownerId])
+        await transaction.insert(schema.notifications).values([...conflictRecipients].map((recipientId) => ({
+          id: randomUUID(),
+          recipientId,
+          projectId,
+          type: 'TEAM_MEMBER_PROJECT_CONFLICT' as const,
+          title: 'Takım üyesi proje çakışması',
+          message: `Eklenen öğrencinin “${conflict.title}” projesinde aynı kategori kaydı bulunuyor (${conflict.ownerName}).`,
+        })))
+        await transaction.insert(schema.auditLogs).values({
+          id: randomUUID(),
+          actorUserId: actor.id,
+          action: 'TEAM_MEMBER_PROJECT_CONFLICT',
+          entityType: 'PROJECT_STUDENT',
+          entityId: `${projectId}:${conflict.studentId}`,
+          afterJson: JSON.stringify(conflict),
+        })
+      }
+
+      await transaction.insert(schema.auditLogs).values({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        action: 'PROJECT_CONVERTED_TO_TEAM',
+        entityType: 'PROJECT',
+        entityId: projectId,
+        beforeJson: JSON.stringify({ participationType: 'INDIVIDUAL', teamName: project.teamName, members: currentMembers.map((m) => m.enrollmentId) }),
+        afterJson: JSON.stringify({ participationType: 'TEAM', teamName, members: [...currentMembers.map((m) => m.enrollmentId), ...uniqueAdditionalIds], addedMembers: uniqueAdditionalIds, conflicts }),
+      })
+
+      return { projectId, conflicts }
+    })
+  }
+
+  async convertToIndividual(actor: AuthenticatedUser, projectId: string, input: { selectedEnrollmentId: string }) {
+    if (!actor || !actor.isActive) throw new AuthorizationError()
+
+    return this.database.transaction(async (transaction) => {
+      const project = await this.getProject(transaction, projectId)
+      assertCanModifyProject(actor, project)
+
+      if (project.participationType === 'INDIVIDUAL') {
+        throw new ProjectRuleError('Proje zaten bireysel projedir.')
+      }
+
+      const currentMembers = await transaction.select({
+        enrollmentId: schema.projectStudents.enrollmentId,
+        studentId: schema.studentEnrollments.studentId,
+      }).from(schema.projectStudents)
+        .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+        .where(and(eq(schema.projectStudents.projectId, projectId), isNull(schema.projectStudents.deletedAt)))
+
+      const selectedMember = currentMembers.find((m) => m.enrollmentId === input.selectedEnrollmentId)
+      if (!selectedMember) {
+        throw new ProjectRuleError('Seçilen öğrenci projenin aktif bir üyesi değil.')
+      }
+
+      const removedMembers = currentMembers.filter((m) => m.enrollmentId !== input.selectedEnrollmentId)
+
+      for (const removed of removedMembers) {
+        await transaction.update(schema.projectStudents).set({
+          deletedAt: new Date(),
+          deletedBy: actor.id,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(schema.projectStudents.projectId, projectId),
+          eq(schema.projectStudents.enrollmentId, removed.enrollmentId),
+        ))
+
+        await transaction.delete(schema.projectDuplicateClaims).where(and(
+          eq(schema.projectDuplicateClaims.projectId, projectId),
+          eq(schema.projectDuplicateClaims.studentId, removed.studentId),
+          eq(schema.projectDuplicateClaims.academicYearId, project.academicYearId),
+          eq(schema.projectDuplicateClaims.categoryId, project.categoryId),
+        ))
+      }
+
+      await transaction.update(schema.projects).set({
+        participationType: 'INDIVIDUAL',
+        teamName: null,
+        updatedAt: new Date(),
+      }).where(eq(schema.projects.id, projectId))
+
+      await transaction.insert(schema.auditLogs).values({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        action: 'PROJECT_CONVERTED_TO_INDIVIDUAL',
+        entityType: 'PROJECT',
+        entityId: projectId,
+        beforeJson: JSON.stringify({ participationType: 'TEAM', teamName: project.teamName, members: currentMembers.map((m) => m.enrollmentId) }),
+        afterJson: JSON.stringify({ participationType: 'INDIVIDUAL', keptEnrollmentId: input.selectedEnrollmentId, removedEnrollmentIds: removedMembers.map((m) => m.enrollmentId) }),
+      })
+
+      return { projectId }
+    })
+  }
+
   private async getProject(database: AppDatabase | Parameters<Parameters<AppDatabase['transaction']>[0]>[0], projectId: string, includeArchived = false) {
     const rows = await database.select({
       id: schema.projects.id,
@@ -595,6 +817,7 @@ export class ProjectService {
       academicYearId: schema.projects.academicYearId,
       categoryId: schema.projects.categoryId,
       participationType: schema.projects.participationType,
+      teamName: schema.projects.teamName,
       deletedAt: schema.projects.deletedAt,
       statusCode: schema.projectStatuses.code,
     }).from(schema.projects)

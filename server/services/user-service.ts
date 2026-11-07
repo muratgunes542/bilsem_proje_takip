@@ -3,6 +3,7 @@ import { and, count, eq, isNull, like, or } from 'drizzle-orm'
 import { AuthorizationError, canManageAllRecords, type AuthenticatedUser } from '../authorization.js'
 import * as schema from '../db/schema.js'
 import type { AppDatabase } from './project-service.js'
+import { resetTeacherPasswordByAdmin } from './admin-promotion.js'
 
 export class UserRuleError extends Error {
   readonly statusCode = 422
@@ -98,7 +99,9 @@ export class UserService {
     if (!canManageAllRecords(actor)) throw new AuthorizationError('Kullanıcı güncelleme yetkiniz yok.')
 
     if (targetUserId === actor.id && updates.isActive === false) {
-      throw new UserRuleError('Kendi hesabınızı pasif duruma getiremezsiniz.')
+      const error = new UserRuleError('Kendi hesabınızı pasif duruma getiremezsiniz.')
+      Object.assign(error, { statusCode: 422 })
+      throw error
     }
 
     return this.database.transaction(async (transaction) => {
@@ -117,7 +120,15 @@ export class UserService {
       if (existing[0].role === 'ADMIN' && existing[0].isActive && (updates.role === 'TEACHER' || updates.isActive === false)) {
         const [adminCount] = await transaction.select({ total: count() }).from(schema.users)
           .where(and(eq(schema.users.role, 'ADMIN'), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
-        if ((adminCount?.total ?? 0) <= 1) throw new UserRuleError('Sistemde en az bir etkin yönetici kalmalıdır.')
+        if ((adminCount?.total ?? 0) <= 1) {
+          const error = new UserRuleError('Sistemde en az bir etkin yönetici kalmalıdır.')
+          Object.assign(error, { statusCode: 422 })
+          throw error
+        }
+      }
+
+      if (updates.isActive === false) {
+        await transaction.delete(schema.sessions).where(eq(schema.sessions.userId, targetUserId))
       }
 
       await transaction
@@ -128,10 +139,11 @@ export class UserService {
         })
         .where(eq(schema.users.id, targetUserId))
 
+      const action = updates.isActive === false ? 'USER_DEACTIVATED' : updates.isActive === true ? 'USER_ACTIVATED' : 'USER_UPDATED'
       await transaction.insert(schema.auditLogs).values({
         id: randomUUID(),
         actorUserId: actor.id,
-        action: 'USER_UPDATED',
+        action,
         entityType: 'USER',
         entityId: targetUserId,
         beforeJson: JSON.stringify({ role: existing[0].role, isActive: existing[0].isActive }),
@@ -153,6 +165,21 @@ export class UserService {
 
       return updated
     })
+  }
+
+  async resetTeacherPassword(actor: AuthenticatedUser, targetUserId: string, customPassword?: string) {
+    if (!canManageAllRecords(actor)) throw new AuthorizationError('Parola sıfırlama yetkiniz yok.')
+    const res = await resetTeacherPasswordByAdmin(this.database, {
+      userId: targetUserId,
+      actorUserId: actor.id,
+      customPassword,
+      auditAction: 'TEACHER_PASSWORD_RESET',
+    })
+    return {
+      temporaryPassword: res.tempPassword,
+      mustChangePassword: true,
+      message: res.message,
+    }
   }
 
   async markTeacherMustChangePassword(actor: AuthenticatedUser, targetUserId: string) {

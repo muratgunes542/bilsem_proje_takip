@@ -54,6 +54,9 @@ const updateUserSchema = z.object({
   role: z.enum(['ADMIN', 'TEACHER']).optional(),
   isActive: z.boolean().optional(),
 })
+const resetTeacherPasswordSchema = z.object({
+  customPassword: z.string().min(8, 'Parola en az 8 karakter olmalıdır.').max(128).optional(),
+}).optional()
 const createTeacherSchema = z.object({ name: z.string().trim().min(2, 'Ad soyad en az 2 karakter olmalıdır.').max(200), email: z.email('Geçerli bir e-posta adresi girin.').transform((email) => email.trim().toLowerCase()) }).strict()
 const changePasswordSchema = z.object({ currentPassword: z.string().min(1, 'Mevcut parola zorunludur.'), newPassword: z.string().min(8, 'Yeni parola en az 8 karakter olmalıdır.').max(128), newPasswordConfirmation: z.string().min(8, 'Parola tekrarı en az 8 karakter olmalıdır.') }).strict().refine((value) => value.newPassword === value.newPasswordConfirmation, { message: 'Yeni parolalar eşleşmiyor.', path: ['newPasswordConfirmation'] })
 
@@ -181,6 +184,15 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
         statusCode: 200,
         payload: { success: true, data: result.users, pagination: result.pagination },
       }
+    }
+
+    const resetUserPasswordMatch = pathname.match(/^\/api\/admin\/(?:users|teachers)\/([^/]+)\/reset-password$/)
+    if (method === 'POST' && resetUserPasswordMatch) {
+      const actor = requireAuth()
+      const targetUserId = resetUserPasswordMatch[1]!
+      const parsedBody = resetTeacherPasswordSchema.parse(req.body)
+      const result = await userService.resetTeacherPassword(actor, targetUserId, parsedBody?.customPassword)
+      return { statusCode: 200, payload: { success: true, data: result } }
     }
 
     const updateUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/)

@@ -5,6 +5,10 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import * as schema from '../db/schema.js'
 import type { AppDatabase } from './project-service.js'
 
+export class AdminPromotionError extends Error {
+  statusCode = 400
+}
+
 export type PromoteAdminParams = {
   email: string
   name?: string
@@ -150,9 +154,11 @@ export async function promoteProductionAdmin(
 }
 
 export type ResetPasswordParams = {
-  email: string
+  email?: string
+  userId?: string
   actorUserId: string
-  auditAction?: 'TEACHER_PASSWORD_RESET_BY_ADMIN' | 'ADMIN_PASSWORD_RESET'
+  customPassword?: string
+  auditAction?: 'TEACHER_PASSWORD_RESET_BY_ADMIN' | 'ADMIN_PASSWORD_RESET' | 'TEACHER_PASSWORD_RESET'
 }
 
 export type ResetPasswordResult = {
@@ -168,30 +174,84 @@ export async function resetTeacherPasswordByAdmin(
   params: ResetPasswordParams,
   hooks?: PromoteAdminTestHooks,
 ): Promise<ResetPasswordResult> {
-  const email = params.email.trim().toLowerCase()
-  const [existing] = await database.select({ id: schema.users.id, role: schema.users.role, name: schema.users.name, mustChangePassword: schema.users.mustChangePassword })
-    .from(schema.users).where(and(eq(schema.users.email, email), isNull(schema.users.deletedAt))).limit(1)
+  const emailCondition = params.email ? eq(schema.users.email, params.email.trim().toLowerCase()) : undefined
+  const userIdCondition = params.userId ? eq(schema.users.id, params.userId) : undefined
+  const targetCondition = userIdCondition ?? emailCondition
+
+  if (!targetCondition) {
+    const error = new AdminPromotionError('Kullanıcı kimliği veya e-posta adresi zorunludur.')
+    error.statusCode = 400
+    throw error
+  }
+
+  const [existing] = await database.select({
+    id: schema.users.id,
+    role: schema.users.role,
+    name: schema.users.name,
+    email: schema.users.email,
+    isActive: schema.users.isActive,
+    mustChangePassword: schema.users.mustChangePassword,
+  })
+    .from(schema.users)
+    .where(and(targetCondition, isNull(schema.users.deletedAt)))
+    .limit(1)
 
   if (!existing) {
-    throw new Error('Kullanıcı bulunamadı.')
+    const error = new AdminPromotionError('Kullanıcı bulunamadı.')
+    error.statusCode = 404
+    throw error
   }
+
+  if (params.actorUserId === existing.id) {
+    throw new AdminPromotionError('Kendi parolanızı bu işlevle sıfırlayamazsınız.')
+  }
+
+  if (params.auditAction !== 'ADMIN_PASSWORD_RESET' && existing.role !== 'TEACHER') {
+    throw new AdminPromotionError('Yalnızca öğretmenlerin parolası sıfırlanabilir.')
+  }
+
+  if (!existing.isActive) {
+    throw new AdminPromotionError('Yalnızca aktif öğretmenlerin parolası sıfırlanabilir. Pasif öğretmenlerin parolası sıfırlanamaz.')
+  }
+
+  if (params.customPassword !== undefined) {
+    if (params.customPassword.length < 8) {
+      const error = new AdminPromotionError('Yeni parola en az 8 karakter olmalıdır.')
+      error.statusCode = 400
+      throw error
+    }
+    if (params.customPassword.length > 128) {
+      const error = new AdminPromotionError('Yeni parola en fazla 128 karakter olabilir.')
+      error.statusCode = 400
+      throw error
+    }
+  }
+
+  const email = existing.email
 
   // Capture original password hash from accounts for atomic rollback on failure
   const [originalAccount] = await database.select({ password: schema.accounts.password })
     .from(schema.accounts).where(and(eq(schema.accounts.userId, existing.id), eq(schema.accounts.providerId, 'credential'))).limit(1)
+
+  if (!originalAccount || !originalAccount.password) {
+    const error = new AdminPromotionError('Kullanıcının parola hesabı bulunamadı.')
+    error.statusCode = 400
+    throw error
+  }
 
   let capturedResetToken = ''
   const authInstance = betterAuth({
     database: drizzleAdapter(database, { provider: 'sqlite', schema, usePlural: true }),
     emailAndPassword: {
       enabled: true,
+      revokeSessionsOnPasswordReset: false,
       sendResetPassword: async (data) => {
         capturedResetToken = data.token
       },
     },
   })
 
-  const tempPassword = `${randomBytes(24).toString('base64url')}aA7!`
+  const tempPassword = params.customPassword ?? `${randomBytes(24).toString('base64url')}aA7!`
 
   try {
     if (hooks?.simulateBetterAuthFailure) {
@@ -230,7 +290,7 @@ export async function resetTeacherPasswordByAdmin(
         id: randomUUID(),
         actorUserId: params.actorUserId,
         action: params.auditAction ?? 'TEACHER_PASSWORD_RESET_BY_ADMIN',
-        entityType: 'USER', entityId: existing.id, afterJson: JSON.stringify({ email }),
+        entityType: 'USER', entityId: existing.id, afterJson: JSON.stringify({ email, method: params.customPassword ? 'ADMIN_CUSTOM' : 'SYSTEM_GENERATED' }),
       })
     })
 
@@ -242,7 +302,8 @@ export async function resetTeacherPasswordByAdmin(
       message: `Kullanıcı paroları başarıyla sıfırlandı ve tüm aktif oturumları kapatıldı: ${email}`,
     }
   } catch (error) {
-    // ATOMIC ROLLBACK: Restore original password hash and user state if any step failed
+    let rollbackFailed = false
+    let rollbackError: unknown = null
     try {
       if (hooks?.simulateRollbackFailure) {
         throw new Error('Simulated secondary rollback failure', { cause: error })
@@ -254,7 +315,13 @@ export async function resetTeacherPasswordByAdmin(
       await database.update(schema.users).set({ mustChangePassword: existing.mustChangePassword })
         .where(eq(schema.users.id, existing.id))
     } catch (rollbackErr) {
-      console.error('Password reset rollback failed:', rollbackErr)
+      rollbackFailed = true
+      rollbackError = rollbackErr
+      console.error('CRITICAL: Password reset rollback failed:', rollbackErr)
+    }
+
+    if (rollbackFailed) {
+      throw new Error(`Kritik Hata: Parola sıfırlama işlemi başarısız oldu ve otomatik rollback de başarısız oldu: ${rollbackError instanceof Error ? rollbackError.message : 'Bilinmeyen hata'} (Orijinal hata: ${error instanceof Error ? error.message : 'Bilinmeyen hata'})`, { cause: error })
     }
 
     throw new Error(`Parola sıfırlama işlemi başarısız oldu ve tüm değişiklikler geri alındı: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`, { cause: error })

@@ -398,15 +398,385 @@ function ExcelImport({ notify, refresh }: { notify: (message: string, type?: Toa
   return <><PageHeading eyebrow="ÖĞRENCİ YÖNETİMİ" title="Excel Aktarımı" description="Öğrenci listesini önizleyin, öğretmenleri eşleştirin ve aktarımı onaylayın." /><div className="import-layout"><div className="import-main"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Dosyanızı seçin</h3><p>Yalnızca .xlsx biçimi kabul edilir.</p></div></div><label className="field-label">Akademik yıl<select className="text-input" value={yearId} onChange={(e) => setYearId(e.target.value)}>{years.map((y) => <option value={y.id} key={y.id}>{y.name}</option>)}</select></label><label className="upload-zone"><Upload size={24} /><b>{file?.name ?? 'Excel dosyanızı buraya bırakın veya seçin'}</b><span>{file ? `${(file.size / 1024).toFixed(0)} KB · Seçildi` : 'XLSX · En fazla 4 MB'}</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary" disabled={busy || !file || !yearId} onClick={() => void preview()}>{busy ? 'İşleniyor…' : 'Dosyayı önizle'} <ChevronRight size={16} /></button></section>{batch && <section className="panel form-panel import-results"><div className="panel-heading"><div><h3>Önizleme sonucu</h3><p>Satırları kontrol edip zorunlu eşleştirmeleri tamamlayın.</p></div><span className="badge badge-blue">{batch.totalRows} kaynak satırı</span></div><div className="import-stat-row"><span><b>{batch.validRows}</b> Geçerli</span><span><b>{batch.invalidRows}</b> Kontrol gerekli</span><span><b>{batch.newStudentCount}</b> Yeni</span><span><b>{batch.continuingStudentCount}</b> Devam</span></div>{batch.results.filter((r) => r.rowNumber > 0).length ? <div className="table-wrap"><table><thead><tr><th>SATIR</th><th>BİLSEM NO</th><th>ÖĞRENCİ</th><th>SONUÇ / EŞLEŞTİRME</th></tr></thead><tbody>{batch.results.filter((r) => r.rowNumber > 0).map((r) => <tr key={r.rowNumber}><td>{r.rowNumber}</td><td className="mono">{r.bilsemNo ?? '—'}</td><td>{personName(r.firstName ?? '', r.lastName ?? '')}</td><td><span className={`badge ${r.resultTypes.includes('INVALID_RECORD') || r.resultTypes.includes('UNMATCHED_TEACHER') || r.resultTypes.includes('DUPLICATE_BILSEM_NO') ? 'badge-amber' : 'badge-green'}`}>{r.resultTypes.join(', ')}</span>{r.message && <small className="row-message">{r.message}</small>}{r.resolutionRequired && <div className="advisor-resolution"><select className="text-input" aria-label={`${r.firstName ?? ''} ${r.lastName ?? ''} danışman öğretmeni`} defaultValue=""><option value="">Etkin öğretmen seçin</option>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name} · {teacher.email}</option>)}</select><button className="button button-secondary button-small" disabled={busy || !r.rowId} onClick={(event) => { const select = event.currentTarget.parentElement?.querySelector('select'); if (select) void resolveTeacher(r, select.value) }}>Eşleştir</button>{teachers.length === 0 && <small className="row-message">Etkin öğretmen hesabı bulunamadı. Önce öğretmen hesabı oluşturun.</small>}</div>}</td></tr>)}</tbody></table></div> : <EmptyState title="Aktarılabilir satır yok" message="Seçilen dosyada öğrenci satırı bulunamadı." />}<div className="import-actions"><button className="button button-secondary" disabled={busy} onClick={() => void cancel()}>Aktarımı iptal et</button><button className="button button-primary" disabled={busy || batch.validRows === 0 || batch.invalidRows > 0} onClick={() => void commit()}>{busy ? 'Onaylanıyor…' : 'Geçerli satırları aktar'} <Check size={16} /></button></div>{batch.invalidRows > 0 && <p className="inline-hint">{batch.invalidRows} satır kontrol bekliyor. Zorunlu öğretmen eşleştirmeleri ve diğer hatalar tamamlanmadan aktarım onaylanamaz.</p>}</section>}</div><aside className="import-aside"><div className="panel info-note"><b><FileSpreadsheet size={17} /> Excel şablon alanları</b><p>BİLSEM No, Ad, Soyad, Okul, Sınıf, Şube, Yetenek Alanı ve Danışman Öğretmen.</p><p>BİLSEM numarası rakamlardan oluşmalı. Güvenilir tam sayılar ve açık sıfır dolgulu biçimler kabul edilir; belirsiz hücreler önizlemede reddedilir.</p></div><div className="panel info-note"><b><Shield size={16} /> Güvenli aktarım</b><p>Dosya önce sunucuda ayrıştırılıp mevcut kayıtlarla karşılaştırılır. Öğrenciler yalnızca onayınızdan sonra kaydedilir.</p></div></aside></div></>
 }
 
+type TeacherFilter = 'ALL' | 'ACTIVE' | 'PASSIVE'
+
 function UsersAdmin({ refreshKey, notify, user }: { refreshKey: number; notify: (message: string, type?: Toast['type']) => void; user: UserProfile }) {
-  const [items, setItems] = useState<UserProfile[]>([]); const [search, setSearch] = useState(''); const [error, setError] = useState<unknown>(null); const [loading, setLoading] = useState(true); const [createOpen, setCreateOpen] = useState(false); const [createBusy, setCreateBusy] = useState(false); const [createError, setCreateError] = useState(''); const [teacherForm, setTeacherForm] = useState({ name: '', email: '' }); const [oneTimeCredential, setOneTimeCredential] = useState<{ name: string; email: string; password: string } | null>(null)
-  const load = useCallback(() => { setLoading(true); apiRequest<UserProfile[]>(`/api/admin/users?page=1&pageSize=100${search.trim() ? `&search=${encodeURIComponent(search.trim())}` : ''}`).then(setItems).catch(setError).finally(() => setLoading(false)) }, [search])
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load, refreshKey])
-  async function update(id: string, body: { role?: Role; isActive?: boolean }) { try { await apiRequest(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }); notify('Kullanıcı güncellendi.'); load() } catch (e) { notify(e instanceof Error ? e.message : 'Kullanıcı güncellenemedi.', 'error') } }
-  async function createTeacher(e: FormEvent) { e.preventDefault(); setCreateBusy(true); setCreateError(''); setOneTimeCredential(null); try { const result = await apiRequest<{ user: { name: string; email: string }; temporaryPassword: string }>('/api/admin/teachers', { method: 'POST', body: JSON.stringify(teacherForm) }); setOneTimeCredential({ ...result.user, password: result.temporaryPassword }); setTeacherForm({ name: '', email: '' }); setCreateOpen(false); notify('Öğretmen hesabı oluşturuldu. Geçici parola bu ekranda yalnızca bir kez gösterilir.'); load() } catch (e) { setCreateError(e instanceof Error ? e.message : 'Öğretmen hesabı oluşturulamadı.') } finally { setCreateBusy(false) } }
-  async function copyTemporaryPassword() { if (!oneTimeCredential) return; try { await navigator.clipboard.writeText(oneTimeCredential.password); notify('Geçici parola panoya kopyalandı.') } catch { notify('Kopyalama başarısız. Parolayı güvenli biçimde not edin.', 'error') } }
-  return <><PageHeading eyebrow="KURUM AYARLARI" title="Kullanıcı Yönetimi" description="Hesap durumunu görüntüleyin; öğretmen hesapları oluşturun, rol ve erişimi yönetin." action={<div className="heading-count"><b>{items.length}</b><span>hesap</span></div>} />{oneTimeCredential && <section className="panel temporary-credential"><div><b>{oneTimeCredential.name} için geçici parola</b><p>{oneTimeCredential.email} · Bu parola yalnızca bu kez gösteriliyor. Öğretmen ilk girişte değiştirmeli.</p><code>{oneTimeCredential.password}</code></div><div className="temporary-actions"><button className="button button-secondary" onClick={() => void copyTemporaryPassword()}>Parolayı kopyala</button><button className="button button-primary" onClick={() => setOneTimeCredential(null)}>Güvenli biçimde aldım</button></div></section>}<section className="panel students-filter-panel"><label className="student-filter-search"><Search size={16}/><input aria-label="Kullanıcı ara" placeholder="Ad veya e-posta ile ara" value={search} onChange={(e) => setSearch(e.target.value)} /></label><button className="button button-primary" onClick={() => { setCreateOpen((v) => !v); setCreateError('') }}>{createOpen ? 'Formu kapat' : 'Öğretmen Ekle'}</button></section>{createOpen && <form className="panel teacher-create-form" onSubmit={(e) => void createTeacher(e)}><h3>Yeni öğretmen hesabı</h3><p>Sunucu güvenli bir geçici parola üretir. Hesap ilk girişte parola değişikliğini zorunlu kılar.</p><div className="form-two-col"><label className="field-label">Ad soyad<input className="text-input" required minLength={2} maxLength={200} value={teacherForm.name} onChange={(e) => setTeacherForm({ ...teacherForm, name: e.target.value })} /></label><label className="field-label">E-posta adresi<input className="text-input" type="email" required value={teacherForm.email} onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })} /></label></div>{createError && <div className="form-error" role="alert">{createError}</div>}<button className="button button-primary" disabled={createBusy}>{createBusy ? 'Hesap oluşturuluyor…' : 'Öğretmen hesabı oluştur'}</button></form>}<div className="user-reset-note user-reset-wide">E-posta sıfırlama bağlantısı etkin değil. Kurulumda e-posta sağlayıcısı yok ve Better Auth’un varsayılan token saklaması açık token kimliği içeriyor. Mevcut öğretmen parolası yönetici tarafından değiştirilemez.</div>{error ? <ErrorState error={error} retry={load} /> : loading ? <LoadingState /> : items.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>KULLANICI</th><th>ROL</th><th>HESAP DURUMU</th><th>KAYIT TARİHİ</th><th>İŞLEMLER</th></tr></thead><tbody>{items.map((u) => <tr key={u.id}><td><div className="student-cell"><div className="student-avatar">{u.name.slice(0, 1)}</div><span><b>{u.name}</b><small>{u.email}</small></span></div></td><td><select className="table-select" value={u.role} onChange={(e) => void update(u.id, { role: e.target.value as Role })}><option value="TEACHER">Öğretmen</option><option value="ADMIN">Yönetici</option></select></td><td><span className={`badge ${u.isActive ? 'badge-green' : 'badge-amber'}`}>{u.isActive ? 'Etkin' : 'Pasif'}</span>{u.mustChangePassword && <small className="user-password-state">İlk parola değişikliği bekleniyor</small>}</td><td>{dateLabel(u.createdAt)}</td><td><button className={`button ${u.isActive ? 'button-secondary' : 'button-primary'} button-small`} disabled={u.id === user.id && u.isActive} onClick={() => void update(u.id, { isActive: !u.isActive })}>{u.id === user.id ? 'Kendi hesabınız' : u.isActive ? 'Erişimi kapat' : 'Etkinleştir'}</button></td></tr>)}</tbody></table></div></div> : <div className="panel"><EmptyState title="Kullanıcı bulunamadı" message="Aramanızı değiştirin veya öğretmen hesabı oluşturun." /></div>}</>
+  const [items, setItems] = useState<UserProfile[]>([])
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<TeacherFilter>('ALL')
+  const [error, setError] = useState<unknown>(null)
+  const [loading, setLoading] = useState(true)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const [teacherForm, setTeacherForm] = useState({ name: '', email: '' })
+  const [oneTimeCredential, setOneTimeCredential] = useState<{ name: string; email: string; password: string } | null>(null)
+
+  const [resetTarget, setResetTarget] = useState<UserProfile | null>(null)
+  const [resetMode, setResetMode] = useState<'auto' | 'custom'>('auto')
+  const [customPassword, setCustomPassword] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetError, setResetError] = useState('')
+
+  const load = useCallback(() => {
+    setLoading(true)
+    apiRequest<UserProfile[]>(`/api/admin/users?page=1&pageSize=100${search.trim() ? `&search=${encodeURIComponent(search.trim())}` : ''}`)
+      .then(setItems)
+      .catch(setError)
+      .finally(() => setLoading(false))
+  }, [search])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timer)
+  }, [load, refreshKey])
+
+  async function update(id: string, body: { role?: Role; isActive?: boolean }) {
+    try {
+      await apiRequest(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+      notify('Kullanıcı güncellendi.')
+      load()
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Kullanıcı güncellenemedi.', 'error')
+    }
+  }
+
+  async function createTeacher(e: FormEvent) {
+    e.preventDefault()
+    setCreateBusy(true)
+    setCreateError('')
+    setOneTimeCredential(null)
+    try {
+      const result = await apiRequest<{ user: { name: string; email: string }; temporaryPassword: string }>('/api/admin/teachers', {
+        method: 'POST',
+        body: JSON.stringify(teacherForm)
+      })
+      setOneTimeCredential({ ...result.user, password: result.temporaryPassword })
+      setTeacherForm({ name: '', email: '' })
+      setCreateOpen(false)
+      notify('Öğretmen hesabı oluşturuldu. Geçici parola bu ekranda yalnızca bir kez gösterilir.')
+      load()
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : 'Öğretmen hesabı oluşturulamadı.')
+    } finally {
+      setCreateBusy(false)
+    }
+  }
+
+  async function confirmResetPassword(e: FormEvent) {
+    e.preventDefault()
+    if (!resetTarget) return
+    if (resetMode === 'custom' && customPassword.length < 8) {
+      setResetError('Parola en az 8 karakter olmalıdır.')
+      return
+    }
+    setResetBusy(true)
+    setResetError('')
+    try {
+      const body = resetMode === 'custom' ? { customPassword } : {}
+      const res = await apiRequest<{ temporaryPassword: string; mustChangePassword: boolean }>(`/api/admin/users/${resetTarget.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      setOneTimeCredential({
+        name: resetTarget.name,
+        email: resetTarget.email,
+        password: res.temporaryPassword,
+      })
+      notify(`'${resetTarget.name}' için geçici parola oluşturuldu.`)
+      setResetTarget(null)
+      setCustomPassword('')
+      setResetMode('auto')
+      load()
+    } catch (e) {
+      setResetError(e instanceof Error ? e.message : 'Parola sıfırlanamadı.')
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
+  async function copyTemporaryPassword() {
+    if (!oneTimeCredential) return
+    try {
+      await navigator.clipboard.writeText(oneTimeCredential.password)
+      notify('Geçici parola panoya kopyalandı.')
+    } catch {
+      notify('Kopyalama başarısız. Parolayı güvenli biçimde not edin.', 'error')
+    }
+  }
+
+  const filteredItems = items.filter((u) => {
+    if (statusFilter === 'ACTIVE') return u.isActive
+    if (statusFilter === 'PASSIVE') return !u.isActive
+    return true
+  })
+
+  const counts = {
+    all: items.length,
+    active: items.filter((u) => u.isActive).length,
+    passive: items.filter((u) => !u.isActive).length,
+  }
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="KURUM AYARLARI"
+        title="Kullanıcı Yönetimi"
+        description="Hesap durumunu görüntüleyin; öğretmen hesapları oluşturun, parola sıfırlayın ve durumlarını yönetin."
+        action={<div className="heading-count"><b>{items.length}</b><span>hesap</span></div>}
+      />
+
+      {oneTimeCredential && (
+        <section className="panel temporary-credential">
+          <div>
+            <b>{oneTimeCredential.name} için geçici parola</b>
+            <p>{oneTimeCredential.email} · Bu parola yalnızca bu kez gösteriliyor. Öğretmen ilk girişte değiştirmeli.</p>
+            <code>{oneTimeCredential.password}</code>
+          </div>
+          <div className="temporary-actions">
+            <button className="button button-secondary" onClick={() => void copyTemporaryPassword()}>Parolayı kopyala</button>
+            <button className="button button-primary" onClick={() => setOneTimeCredential(null)}>Güvenli biçimde aldım</button>
+          </div>
+        </section>
+      )}
+
+      <div className="report-tabs" style={{ marginBottom: 12 }}>
+        <button
+          type="button"
+          className={`report-tab ${statusFilter === 'ALL' ? 'report-tab-active' : ''}`}
+          onClick={() => setStatusFilter('ALL')}
+        >
+          Tümü ({counts.all})
+        </button>
+        <button
+          type="button"
+          className={`report-tab ${statusFilter === 'ACTIVE' ? 'report-tab-active' : ''}`}
+          onClick={() => setStatusFilter('ACTIVE')}
+        >
+          Aktif Öğretmenler ({counts.active})
+        </button>
+        <button
+          type="button"
+          className={`report-tab ${statusFilter === 'PASSIVE' ? 'report-tab-active' : ''}`}
+          onClick={() => setStatusFilter('PASSIVE')}
+        >
+          Pasif Öğretmenler ({counts.passive})
+        </button>
+      </div>
+
+      <section className="panel students-filter-panel">
+        <label className="student-filter-search">
+          <Search size={16} />
+          <input
+            aria-label="Kullanıcı ara"
+            placeholder="Ad veya e-posta ile ara"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </label>
+        <button className="button button-primary" onClick={() => { setCreateOpen((v) => !v); setCreateError('') }}>
+          {createOpen ? 'Formu kapat' : 'Öğretmen Ekle'}
+        </button>
+      </section>
+
+      {createOpen && (
+        <form className="panel teacher-create-form" onSubmit={(e) => void createTeacher(e)}>
+          <h3>Yeni öğretmen hesabı</h3>
+          <p>Sunucu güvenli bir geçici parola üretir. Hesap ilk girişte parola değişikliğini zorunlu kılar.</p>
+          <div className="form-two-col">
+            <label className="field-label">
+              Ad soyad
+              <input
+                className="text-input"
+                required
+                minLength={2}
+                maxLength={200}
+                value={teacherForm.name}
+                onChange={(e) => setTeacherForm({ ...teacherForm, name: e.target.value })}
+              />
+            </label>
+            <label className="field-label">
+              E-posta adresi
+              <input
+                className="text-input"
+                type="email"
+                required
+                value={teacherForm.email}
+                onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })}
+              />
+            </label>
+          </div>
+          {createError && <div className="form-error" role="alert">{createError}</div>}
+          <button className="button button-primary" disabled={createBusy}>
+            {createBusy ? 'Hesap oluşturuluyor…' : 'Öğretmen hesabı oluştur'}
+          </button>
+        </form>
+      )}
+
+      {error ? (
+        <ErrorState error={error} retry={load} />
+      ) : loading ? (
+        <LoadingState />
+      ) : filteredItems.length ? (
+        <div className="panel table-panel">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>KULLANICI</th>
+                  <th>ROL</th>
+                  <th>HESAP DURUMU</th>
+                  <th>KAYIT TARİHİ</th>
+                  <th>İŞLEMLER</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredItems.map((u) => {
+                  const isSelf = u.id === user.id
+                  const canResetPassword = u.role === 'TEACHER' && u.isActive && !isSelf
+
+                  return (
+                    <tr key={u.id}>
+                      <td>
+                        <div className="student-cell">
+                          <div className="student-avatar">{u.name.slice(0, 1)}</div>
+                          <span>
+                            <b>{u.name}</b>
+                            <small>{u.email}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <select
+                          className="table-select"
+                          value={u.role}
+                          onChange={(e) => void update(u.id, { role: e.target.value as Role })}
+                        >
+                          <option value="TEACHER">Öğretmen</option>
+                          <option value="ADMIN">Yönetici</option>
+                        </select>
+                      </td>
+                      <td>
+                        <span className={`badge ${u.isActive ? 'badge-green' : 'badge-amber'}`}>
+                          {u.isActive ? 'Aktif' : 'Pasif'}
+                        </span>
+                        {u.mustChangePassword && (
+                          <small className="user-password-state">İlk parola değişikliği bekleniyor</small>
+                        )}
+                      </td>
+                      <td>{dateLabel(u.createdAt)}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            className={`button ${u.isActive ? 'button-secondary' : 'button-primary'} button-small`}
+                            disabled={isSelf && u.isActive}
+                            onClick={() => void update(u.id, { isActive: !u.isActive })}
+                          >
+                            {isSelf ? 'Kendi hesabınız' : u.isActive ? 'Pasife Al' : 'Aktifleştir'}
+                          </button>
+
+                          {canResetPassword && (
+                            <button
+                              className="button button-secondary button-small"
+                              onClick={() => {
+                                setResetTarget(u)
+                                setResetMode('auto')
+                                setCustomPassword('')
+                                setResetError('')
+                              }}
+                            >
+                              Şifre Sıfırla
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="panel">
+          <EmptyState title="Kullanıcı bulunamadı" message="Aramanızı veya filtreyi değiştirin." />
+        </div>
+      )}
+
+      {resetTarget && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <h3>Öğretmen Parolasını Sıfırla</h3>
+            <p>
+              <b>{resetTarget.name}</b> ({resetTarget.email}) için yeni bir geçici parola tanımlayın.
+            </p>
+            <form onSubmit={(e) => void confirmResetPassword(e)} style={{ display: 'grid', gap: '12px', marginTop: '10px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="resetMode"
+                  checked={resetMode === 'auto'}
+                  onChange={() => setResetMode('auto')}
+                />
+                <span>Güvenli geçici parola sistem tarafından oluşturulsun</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="resetMode"
+                  checked={resetMode === 'custom'}
+                  onChange={() => setResetMode('custom')}
+                />
+                <span>Geçici parolayı kendim belirlemek istiyorum</span>
+              </label>
+
+              {resetMode === 'custom' && (
+                <label className="field-label" style={{ marginTop: '4px' }}>
+                  Yeni Geçici Parola (en az 8 karakter)
+                  <input
+                    className="text-input"
+                    type="password"
+                    required
+                    minLength={8}
+                    value={customPassword}
+                    onChange={(e) => setCustomPassword(e.target.value)}
+                    placeholder="En az 8 karakterli parola"
+                  />
+                </label>
+              )}
+
+              <p className="modal-warning" style={{ margin: '4px 0 0' }}>
+                Eski oturumlar sonlandırılacak ve öğretmen sisteme ilk girişinde yeni bir parola belirlemek zorunda olacaktır.
+              </p>
+
+              {resetError && <div className="form-error" role="alert">{resetError}</div>}
+
+              <div className="modal-actions" style={{ marginTop: '12px' }}>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={resetBusy}
+                  onClick={() => setResetTarget(null)}
+                >
+                  İptal
+                </button>
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={resetBusy}
+                >
+                  {resetBusy ? 'Sıfırlanıyor…' : 'Parolayı Sıfırla'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
+
+
 function AcademicYears({ refreshKey, notify }: { refreshKey: number; notify: (message: string, type?: Toast['type']) => void }) { const [items, setItems] = useState<AcademicYear[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [form, setForm] = useState({ name: '', startsOn: '', endsOn: '', isCurrent: false }); const load = useCallback(() => { apiRequest<AcademicYear[]>('/api/academic-years').then(setItems).catch((e) => setError(e.message)) }, []); useEffect(() => { const timer = window.setTimeout(() => load(), 0); return () => window.clearTimeout(timer) }, [load, refreshKey]); async function submit(e: FormEvent) { e.preventDefault(); const parsed = z.object({ name: z.string().trim().min(1, 'Yıl adı zorunlu.'), startsOn: z.iso.date(), endsOn: z.iso.date() }).safeParse(form); if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Bilgileri kontrol edin.'); return }; setBusy(true); setError(''); try { await apiRequest('/api/academic-years', { method: 'POST', body: JSON.stringify(form) }); setForm({ name: '', startsOn: '', endsOn: '', isCurrent: false }); notify('Akademik yıl oluşturuldu.'); load() } catch (e) { setError(e instanceof Error ? e.message : 'Akademik yıl eklenemedi.') } finally { setBusy(false) } } return <><PageHeading eyebrow="KURUM AYARLARI" title="Akademik Yıllar" description="Öğrenci ve proje kayıtlarının bağlandığı akademik dönemleri yönetin." /><div className="year-layout"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Yeni akademik yıl</h3><p>Başlangıç ve bitiş tarihlerini girin.</p></div></div><form onSubmit={(e) => void submit(e)}><label className="field-label">Akademik yıl adı<input className="text-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="2026–2027" /></label><div className="form-two-col"><label className="field-label">Başlangıç tarihi<input className="text-input" type="date" value={form.startsOn} onChange={(e) => setForm({ ...form, startsOn: e.target.value })} /></label><label className="field-label">Bitiş tarihi<input className="text-input" type="date" value={form.endsOn} onChange={(e) => setForm({ ...form, endsOn: e.target.value })} /></label></div><label className="checkbox-line"><input type="checkbox" checked={form.isCurrent} onChange={(e) => setForm({ ...form, isCurrent: e.target.checked })} /> Bu yılı güncel akademik yıl yap</label>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary" disabled={busy}>{busy ? 'Kaydediliyor…' : 'Akademik yılı ekle'} <Plus size={16} /></button></form></section><section className="panel"><div className="panel-heading"><div><h3>Tanımlı yıllar</h3><p>{items.length} akademik dönem</p></div></div>{items.length ? <div className="year-list">{items.map((y) => <div className="year-row" key={y.id}><span className="year-icon"><CalendarDays size={18} /></span><span><b>{y.name}</b><small>{dateLabel(y.startsOn)} — {dateLabel(y.endsOn)}</small></span>{y.isCurrent && <span className="badge badge-green">Güncel</span>}</div>)}</div> : <EmptyState title="Akademik yıl yok" message="Öğrenci kaydı için önce bir akademik yıl oluşturun." />}</section></div></> }
 
 function Notifications({ refreshKey }: { refreshKey: number }) { const [items, setItems] = useState<Array<{ id: string; title: string; message: string; isRead: boolean; createdAt: string }>>([]); const [error, setError] = useState<unknown>(null); const load = useCallback(() => { apiRequest<Array<{ id: string; title: string; message: string; isRead: boolean; createdAt: string }>>('/api/notifications?page=1&pageSize=100').then(setItems).catch(setError) }, []); useEffect(() => { const timer = window.setTimeout(() => load(), 0); return () => window.clearTimeout(timer) }, [load, refreshKey]); async function mark(id: string) { try { await apiRequest(`/api/notifications/${id}/read`, { method: 'PATCH' }); load() } catch (e) { setError(e) } } return <><PageHeading eyebrow="HESAP" title="Bildirimler" description="Kurum hesabınıza gönderilen güncellemeler." />{error ? <ErrorState error={error} retry={load} /> : items.length ? <div className="panel notification-list">{items.map((n) => <article className={`notification-row ${n.isRead ? '' : 'notification-unread'}`} key={n.id}><span className="notification-icon"><Bell size={17} /></span><div><b>{n.title}</b><p>{n.message}</p><small>{dateLabel(n.createdAt)}</small></div>{!n.isRead && <button className="text-button" onClick={() => void mark(n.id)}>Okundu işaretle</button>}</article>)}</div> : <div className="panel"><EmptyState title="Yeni bildirim yok" message="Öğrenci ve proje çalışmalarınızla ilgili güncellemeler burada görünür." /></div>}</> }
