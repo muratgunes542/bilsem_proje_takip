@@ -260,17 +260,56 @@ export class StudentService {
       .orderBy(desc(schema.academicYears.startsOn), asc(schema.projects.title))
     if (projects.length === 0) return []
     const projectIds = projects.map((project) => project.projectId)
-    const advisorRows = await this.database.select({
-      projectId: schema.projectAdvisors.projectId,
-      userId: schema.users.id,
-      name: schema.users.name,
-    }).from(schema.projectAdvisors)
-      .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
-      .where(and(inArray(schema.projectAdvisors.projectId, projectIds), isNull(schema.projectAdvisors.deletedAt)))
-    return projects.map((project) => ({
-      ...project,
-      advisors: advisorRows.filter((advisor) => advisor.projectId === project.projectId),
-    }))
+    const [advisorRows, legacyAdvisorRows] = await Promise.all([
+      this.database.select({
+        projectId: schema.projectAdvisors.projectId,
+        userId: schema.users.id,
+        name: sql<string>`coalesce(${schema.users.name}, 'Bilinmeyen Danışman')`,
+      }).from(schema.projectAdvisors)
+        .leftJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+        .where(and(inArray(schema.projectAdvisors.projectId, projectIds), isNull(schema.projectAdvisors.deletedAt))),
+      this.database.select({
+        projectId: schema.projectStudents.projectId,
+        advisorUserId: schema.studentEnrollments.advisorUserId,
+        advisorName: schema.studentEnrollments.advisorName,
+        teacherName: schema.users.name,
+      }).from(schema.projectStudents)
+        .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+        .leftJoin(schema.users, eq(schema.users.id, schema.studentEnrollments.advisorUserId))
+        .where(and(inArray(schema.projectStudents.projectId, projectIds), isNull(schema.projectStudents.deletedAt))),
+    ])
+    return projects.map((project) => {
+      const explicitAdvisors = advisorRows.filter((advisor) => advisor.projectId === project.projectId)
+      const advisors: Array<{ userId: string; name: string }> = []
+      if (explicitAdvisors.length > 0) {
+        const seenUserIds = new Set<string>()
+        for (const adv of explicitAdvisors) {
+          if (adv.userId && !seenUserIds.has(adv.userId)) {
+            seenUserIds.add(adv.userId)
+            advisors.push({ userId: adv.userId, name: adv.name })
+          }
+        }
+      } else {
+        const legacyRows = legacyAdvisorRows.filter((l) => l.projectId === project.projectId)
+        const seenKeys = new Set<string>()
+        for (const l of legacyRows) {
+          const name = l.teacherName || l.advisorName
+          if (!name) continue
+          const key = l.advisorUserId ? `user:${l.advisorUserId}` : `name:${name}`
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key)
+            advisors.push({
+              userId: l.advisorUserId || `legacy:${name}`,
+              name,
+            })
+          }
+        }
+      }
+      return {
+        ...project,
+        advisors,
+      }
+    })
   }
 }
 

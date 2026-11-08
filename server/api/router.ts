@@ -37,6 +37,7 @@ const createProjectSchema = z.object({
   participationType: z.enum(['INDIVIDUAL', 'TEAM']),
   teamName: z.string().nullable().optional(),
   enrollmentIds: z.array(z.string().min(1)).min(1, 'En az bir öğrenci seçilmelidir.').max(50),
+  advisorUserIds: z.array(z.string().min(1)).optional(),
 })
 
 const updateProjectSchema = z.object({
