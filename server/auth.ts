@@ -37,6 +37,28 @@ export function createAuth(database: typeof db = db, autoSignIn = true) {
       schema,
       usePlural: true,
     }),
+    session: {
+      expiresIn: 7 * 24 * 60 * 60,
+      updateAge: 24 * 60 * 60,
+      cookieCache: {
+        enabled: false,
+      },
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          before: async (session) => {
+            const rawSession = session as { lastActiveAt?: string | number | Date; createdAt?: string | number | Date }
+            return {
+              data: {
+                ...session,
+                lastActiveAt: rawSession.lastActiveAt ? new Date(rawSession.lastActiveAt) : (rawSession.createdAt ? new Date(rawSession.createdAt) : new Date()),
+              }
+            }
+          }
+        }
+      }
+    },
     emailAndPassword: {
       enabled: true,
       autoSignIn,

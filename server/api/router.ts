@@ -60,6 +60,12 @@ const convertToIndividualSchema = z.object({
   selectedEnrollmentId: z.string().trim().min(1, 'Bireysel projede kalacak öğrenci seçilmelidir.'),
 })
 
+
+const updateProjectAdvisorsSchema = z.object({
+  addUserIds: z.array(z.string().min(1)).optional().default([]),
+  removeUserIds: z.array(z.string().min(1)).optional().default([]),
+}).strict()
+
 const updateUserSchema = z.object({
   role: z.enum(['ADMIN', 'TEACHER']).optional(),
   isActive: z.boolean().optional(),
@@ -452,7 +458,16 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       return { statusCode: 200, payload: { success: true, data: result } }
     }
 
-    // Project Detail, Update, Archive (DELETE /api/projects/:id)
+    const updateProjectAdvisorsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/advisors$/)
+    if (method === 'PATCH' && updateProjectAdvisorsMatch) {
+      const actor = requireAuth()
+      const projectId = updateProjectAdvisorsMatch[1]!
+      const input = updateProjectAdvisorsSchema.parse(req.body)
+      const result = await projectService.updateProjectAdvisors(actor, projectId, input)
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+        // Project Detail, Update, Archive (DELETE /api/projects/:id)
     const projectDetailMatch = pathname.match(/^\/api\/projects\/([^/]+)$/)
     if (projectDetailMatch) {
       const actor = requireAuth()

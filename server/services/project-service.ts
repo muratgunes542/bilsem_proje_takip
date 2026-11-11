@@ -38,6 +38,11 @@ export type ListProjectsFilters = {
   search?: string
 }
 
+export type UpdateProjectAdvisorsInput = {
+  addUserIds?: string[]
+  removeUserIds?: string[]
+}
+
 export class ProjectRuleError extends Error {
   readonly statusCode = 422
 
@@ -1155,6 +1160,236 @@ export class ProjectService {
       })
 
       return { projectId }
+    })
+  }
+
+  async updateProjectAdvisors(
+    actor: AuthenticatedUser,
+    projectId: string,
+    input: UpdateProjectAdvisorsInput,
+  ) {
+    if (!actor || !actor.isActive || actor.role !== 'ADMIN') {
+      throw new AuthorizationError('Yalnızca yöneticiler proje danışmanlarını değiştirebilir.', 403)
+    }
+
+    const toAdd = [...new Set(input.addUserIds ?? [])]
+    const toRemove = [...new Set(input.removeUserIds ?? [])]
+
+    for (const id of [...toAdd, ...toRemove]) {
+      if (!id || typeof id !== 'string' || id.startsWith('legacy:')) {
+        throw new ProjectRuleError('Sanal veya legacy kimlikler doğrudan değiştirilemez.')
+      }
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const project = await this.getProject(transaction, projectId)
+
+      // 1. Mevcut aktif danışmanlar
+      let existingActive = await transaction
+        .select({
+          userId: schema.projectAdvisors.userId,
+          isPrimary: schema.projectAdvisors.isPrimary,
+        })
+        .from(schema.projectAdvisors)
+        .where(and(
+          eq(schema.projectAdvisors.projectId, projectId),
+          isNull(schema.projectAdvisors.deletedAt),
+        ))
+
+      // Kural 13: Eski projeler - aktif danışmanlar 0 ise önceden kayıtlı danışmanları oluştur
+      if (existingActive.length === 0) {
+        // Öğrenci kayıtlarından danışmanları al (yalnızca aktif kayıtlar)
+        const enrollmentAdvisors = await transaction
+          .select({ advisorUserId: schema.studentEnrollments.advisorUserId })
+          .from(schema.projectStudents)
+          .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+          .where(and(
+            eq(schema.projectStudents.projectId, projectId),
+            isNull(schema.projectStudents.deletedAt),
+            isNull(schema.studentEnrollments.deletedAt),
+            eq(schema.studentEnrollments.isActive, true),
+          ))
+
+        const candidateIds = [...new Set(enrollmentAdvisors.map((r) => r.advisorUserId).filter(Boolean))] as string[]
+        let validTeacherIds: string[] = []
+
+        if (candidateIds.length > 0) {
+          const validTeachers = await transaction
+            .select({ id: schema.users.id })
+            .from(schema.users)
+            .where(and(
+              inArray(schema.users.id, candidateIds),
+              eq(schema.users.role, 'TEACHER'),
+              eq(schema.users.isActive, true),
+              isNull(schema.users.deletedAt),
+            ))
+          validTeacherIds = validTeachers.map((t) => t.id)
+        }
+
+        if (validTeacherIds.length > 0) {
+          const now = new Date()
+          for (let i = 0; i < validTeacherIds.length; i++) {
+            await transaction.insert(schema.projectAdvisors)
+              .values({ projectId, userId: validTeacherIds[i]!, isPrimary: i === 0, createdAt: now, updatedAt: now })
+              .onConflictDoUpdate({
+                target: [schema.projectAdvisors.projectId, schema.projectAdvisors.userId],
+                set: { deletedAt: null, deletedBy: null, isPrimary: i === 0, updatedAt: now },
+              })
+          }
+        } else {
+          const creatorTeacher = await transaction
+            .select({ id: schema.users.id }).from(schema.users)
+            .where(and(
+              eq(schema.users.id, project.createdBy),
+              eq(schema.users.role, 'TEACHER'),
+              eq(schema.users.isActive, true),
+              isNull(schema.users.deletedAt),
+            )).limit(1)
+
+          if (creatorTeacher[0]) {
+            const now = new Date()
+            await transaction.insert(schema.projectAdvisors)
+              .values({ projectId, userId: creatorTeacher[0].id, isPrimary: true, createdAt: now, updatedAt: now })
+              .onConflictDoUpdate({
+                target: [schema.projectAdvisors.projectId, schema.projectAdvisors.userId],
+                set: { deletedAt: null, deletedBy: null, isPrimary: true, updatedAt: now },
+              })
+          } else {
+            throw new ProjectRuleError('Eski projeye ait geçerli bir danışman bulunamadığı için işlem yapılamaz.')
+          }
+        }
+
+        // Yeniden sor
+        existingActive = await transaction
+          .select({ userId: schema.projectAdvisors.userId, isPrimary: schema.projectAdvisors.isPrimary })
+          .from(schema.projectAdvisors)
+          .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
+      }
+
+      // Audit için önceki danışmanlar
+      const beforeAdvisors = await transaction
+        .select({ userId: schema.users.id, name: schema.users.name, isPrimary: schema.projectAdvisors.isPrimary })
+        .from(schema.projectAdvisors)
+        .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+        .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
+
+      const existingActiveIds = new Set(existingActive.map((a) => a.userId))
+
+      // Validation
+      for (const id of toAdd) {
+        if (toRemove.includes(id)) {
+          throw new ProjectRuleError('Aynı danışman hem eklenip hem çıkarılamaz.')
+        }
+      }
+      for (const id of toAdd) {
+        if (existingActiveIds.has(id)) {
+          throw new ProjectRuleError('Seçilen öğretmen zaten projenin aktif danışmanıdır.')
+        }
+      }
+      for (const id of toRemove) {
+        if (!existingActiveIds.has(id)) {
+          throw new ProjectRuleError('Çıkarılmak istenen öğretmen projenin aktif danışmanı değil.')
+        }
+      }
+
+      // Kural 7: Yalnızca aktif TEACHER hesapları eklenebilsin
+      if (toAdd.length > 0) {
+        const validTeachers = await transaction
+          .select({ id: schema.users.id }).from(schema.users)
+          .where(and(
+            inArray(schema.users.id, toAdd),
+            eq(schema.users.role, 'TEACHER'),
+            eq(schema.users.isActive, true),
+            isNull(schema.users.deletedAt),
+          ))
+        if (validTeachers.length !== toAdd.length) {
+          throw new ProjectRuleError('Yalnızca aktif öğretmen hesapları danışman olarak eklenebilir.')
+        }
+      }
+
+      // Kural 9: En az 1 aktif danışman
+      const remainingCount = (existingActive.length - toRemove.length) + toAdd.length
+      if (remainingCount < 1) {
+        throw new ProjectRuleError('Bir projede en az bir aktif danışman bulunmalıdır.')
+      }
+
+      const now = new Date()
+
+      // Mevcut tum kayitlar (silinmis dahil)
+      const allRows = await transaction
+        .select({ userId: schema.projectAdvisors.userId, isPrimary: schema.projectAdvisors.isPrimary, deletedAt: schema.projectAdvisors.deletedAt })
+        .from(schema.projectAdvisors)
+        .where(eq(schema.projectAdvisors.projectId, projectId))
+      const allRowsMap = new Map(allRows.map((r) => [r.userId, r]))
+
+      // Kural 10: Soft-delete
+      for (const userId of toRemove) {
+        await transaction.update(schema.projectAdvisors)
+          .set({ deletedAt: now, deletedBy: actor.id, updatedAt: now })
+          .where(and(eq(schema.projectAdvisors.projectId, projectId), eq(schema.projectAdvisors.userId, userId)))
+      }
+
+      // Kural 11: Yeniden ekleme / reactivation
+      for (const userId of toAdd) {
+        const existingRow = allRowsMap.get(userId)
+        if (existingRow) {
+          await transaction.update(schema.projectAdvisors)
+            .set({ deletedAt: null, deletedBy: null, isPrimary: false, updatedAt: now })
+            .where(and(eq(schema.projectAdvisors.projectId, projectId), eq(schema.projectAdvisors.userId, userId)))
+        } else {
+          await transaction.insert(schema.projectAdvisors)
+            .values({ projectId, userId, isPrimary: false, createdAt: now, updatedAt: now })
+        }
+      }
+
+      // Rigorous Primary Advisor Reconciliation: Exactly one active primary advisor
+      const currentActive = await transaction
+        .select({ userId: schema.projectAdvisors.userId, isPrimary: schema.projectAdvisors.isPrimary })
+        .from(schema.projectAdvisors)
+        .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
+
+      const removedSet = new Set(toRemove)
+      const existingPrimary = existingActive.find((a) => a.isPrimary && !removedSet.has(a.userId))
+
+      let chosenPrimaryUserId: string
+      if (existingPrimary && currentActive.some((a) => a.userId === existingPrimary.userId)) {
+        chosenPrimaryUserId = existingPrimary.userId
+      } else {
+        const sortedActive = [...currentActive].sort((a, b) => a.userId.localeCompare(b.userId))
+        chosenPrimaryUserId = sortedActive[0]!.userId
+      }
+
+      for (const adv of currentActive) {
+        const shouldBePrimary = adv.userId === chosenPrimaryUserId
+        if (adv.isPrimary !== shouldBePrimary) {
+          await transaction.update(schema.projectAdvisors)
+            .set({ isPrimary: shouldBePrimary, updatedAt: now })
+            .where(and(
+              eq(schema.projectAdvisors.projectId, projectId),
+              eq(schema.projectAdvisors.userId, adv.userId),
+            ))
+        }
+      }
+
+      // Final durum
+      const finalAdvisors = await transaction
+        .select({ userId: schema.users.id, name: schema.users.name, email: schema.users.email, isPrimary: schema.projectAdvisors.isPrimary })
+        .from(schema.projectAdvisors)
+        .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+        .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
+
+      // Kural 14: Audit log
+      await transaction.insert(schema.auditLogs).values({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        action: 'PROJECT_ADVISORS_UPDATED',
+        entityType: 'PROJECT',
+        entityId: projectId,
+        beforeJson: JSON.stringify({ advisors: beforeAdvisors }),
+        afterJson: JSON.stringify({ advisors: finalAdvisors.map((a) => ({ userId: a.userId, name: a.name, isPrimary: a.isPrimary })) }),
+      })
+
+      return { projectId, advisors: finalAdvisors }
     })
   }
 

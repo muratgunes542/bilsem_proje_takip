@@ -1,13 +1,18 @@
 import { createServer as createHttpServer } from 'node:http'
 import { toNodeHandler } from 'better-auth/node'
 import { createServer as createViteServer } from 'vite'
+import { migrate } from 'drizzle-orm/libsql/migrator'
 import { auth } from '../server/auth'
 import { env } from '../server/env'
 import { dispatchNodeApi } from '../server/api/router'
+import { db } from '../server/db/client'
 
 if (env.APP_ENV !== 'development' || env.TURSO_DATABASE_URL !== 'file:./data/development.db' || env.TURSO_AUTH_TOKEN) {
   throw new Error('Yerel sunucu yalnızca APP_ENV=development ve TURSO_DATABASE_URL=file:./data/development.db hedefiyle çalışır.')
 }
+
+// Automatically apply any pending migrations to local development db on startup
+await migrate(db, { migrationsFolder: 'drizzle/development' })
 
 const authHandler = toNodeHandler(auth)
 const httpServer = createHttpServer()

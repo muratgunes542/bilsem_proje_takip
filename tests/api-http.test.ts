@@ -205,4 +205,58 @@ describe('HTTP API adapter', () => {
     })
     expect(tooLarge.status).toBe(413)
   })
+
+  it('handles PATCH /api/projects/:id/advisors with strict role authorization and validation', async () => {
+    // Proje oluştur
+    const categoryList = await db.select().from(schema.projectCategories).limit(1)
+    const statusList = await db.select().from(schema.projectStatuses).limit(1)
+    const categoryId = categoryList[0]?.id ?? 'cat-http'
+    const statusId = statusList[0]?.id ?? 'stat-http'
+
+    if (categoryList.length === 0) {
+      await db.insert(schema.projectCategories).values({ id: categoryId, code: 'SPECIAL_PROJECT', name: 'Özel Proje' })
+    }
+    if (statusList.length === 0) {
+      await db.insert(schema.projectStatuses).values({ id: statusId, code: 'DRAFT', name: 'Taslak' })
+    }
+
+    await db.insert(schema.projects).values({
+      id: 'proj-http-adv',
+      title: 'HTTP Advisors Test Project',
+      academicYearId: 'http-year',
+      categoryId,
+      statusId,
+      createdBy: 'http-teacher',
+    })
+    await db.insert(schema.projectAdvisors).values({ projectId: 'proj-http-adv', userId: 'http-teacher', isPrimary: true })
+
+    // 1. Öğretmen isteği -> 403 Forbidden
+    const teacherReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher' },
+      body: JSON.stringify({ addUserIds: ['http-teacher'] }),
+    })
+    expect(teacherReq.status).toBe(403)
+
+    // 2. Geçersiz öğretmen ekleme isteği (http-admin öğretmen değil) -> 422 Unprocessable Entity
+    const invalidReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-admin' },
+      body: JSON.stringify({ addUserIds: ['http-admin'] }),
+    })
+    expect(invalidReq.status).toBe(422)
+
+    // 3. Geçerli yönetici isteği -> 200 OK
+    // Ek öğretmen hesabı oluştur
+    await db.insert(schema.users).values({ id: 'http-teacher-2', name: 'HTTP Teacher Two', email: 'http-teacher-2@test.com', role: 'TEACHER', isActive: true })
+    const validReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-admin' },
+      body: JSON.stringify({ addUserIds: ['http-teacher-2'] }),
+    })
+    expect(validReq.status).toBe(200)
+    const payload = await validReq.json() as { success: boolean; data: { advisors: Array<{ userId: string }> } }
+    expect(payload.success).toBe(true)
+    expect(payload.data.advisors.map((a) => a.userId)).toContain('http-teacher-2')
+  })
 })

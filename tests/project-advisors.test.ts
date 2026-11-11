@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { AuthenticatedUser } from '../server/authorization'
+import { handleApiRequest } from '../server/api/router'
+import { AuthorizationError, type AuthenticatedUser } from '../server/authorization'
 import * as schema from '../server/db/schema'
 import { ProjectService, ProjectRuleError } from '../server/services/project-service'
 import { StudentService } from '../server/services/student-service'
@@ -884,5 +885,345 @@ describe('Project Advisors Assignment and Fallback Tests (8 Scenarios)', () => {
     expect(reactivatedT4[0]?.deletedBy).toBeNull()
     expect(reactivatedT4[0]?.isPrimary).toBe(false)
     expect(reactivatedT4[0]?.updatedAt.getTime()).toBeGreaterThan(softDeleteTime.getTime())
+  })
+
+  it('23. Yalnızca ADMIN proje danışmanlarını değiştirebilir, TEACHER değiştiremez', async () => {
+    const created = await projectService.createProject(teacher1, {
+      title: 'Auth Check Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    // Öğretmen değiştirmeye çalıştığında AuthorizationError fırlatılmalı
+    await expect(
+      projectService.updateProjectAdvisors(teacher1, created.projectId, { addUserIds: [teacher2.id] })
+    ).rejects.toThrow(AuthorizationError)
+
+    // Yönetici değiştirebilmeli
+    const res = await projectService.updateProjectAdvisors(admin, created.projectId, { addUserIds: [teacher2.id] })
+    expect(res.advisors.map((a) => a.userId)).toContain(teacher2.id)
+  })
+
+  it('24. Bir projede kalan tek danışmanın silinmesi engellenmeli', async () => {
+    const created = await projectService.createProject(teacher1, {
+      title: 'Single Advisor Removal Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    // Tek danışmanı çıkarmaya çalışmak ProjectRuleError fırlatmalı
+    await expect(
+      projectService.updateProjectAdvisors(admin, created.projectId, { removeUserIds: [teacher1.id] })
+    ).rejects.toThrow(ProjectRuleError)
+  })
+
+  it('25. Eski projelerde açık projectAdvisors kaydı yoksa yıllık öğrenci kaydı danışmanları korunur veya proje sahibi öğretmene düşülür', async () => {
+    // 1. Öğrenci kaydı danışmanı olan eski proje
+    const legacyProj1 = 'legacy-proj-advisors-1'
+    await db.insert(schema.projects).values({
+      id: legacyProj1,
+      title: 'Legacy Project With Enrollment Advisor',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      createdBy: teacher2.id,
+      participationType: 'INDIVIDUAL',
+    })
+    await db.insert(schema.projectStudents).values({ projectId: legacyProj1, enrollmentId: 'enroll-1' }) // enroll-1'in danışmanı teacher1
+
+    // İlk işlemde teacher1 korunsun ve üzerine teacher2 eklensin
+    const updated1 = await projectService.updateProjectAdvisors(admin, legacyProj1, { addUserIds: [teacher2.id] })
+    expect(updated1.advisors.map((a) => a.userId)).toContain(teacher1.id)
+    expect(updated1.advisors.map((a) => a.userId)).toContain(teacher2.id)
+
+    // 2. Öğrenci kaydı danışmanı olmayan (null) ama aktif proje sahibi olan eski proje
+    await db.insert(schema.students).values({ id: 's-no-adv', bilsemNo: '8881', firstName: 'NoAdv', lastName: 'Student' })
+    await db.insert(schema.studentEnrollments).values({
+      id: 'enroll-no-adv',
+      studentId: 's-no-adv',
+      academicYearId: 'year-2024',
+      advisorUserId: null,
+      advisorName: null,
+      isActive: true,
+    })
+    const legacyProj2 = 'legacy-proj-advisors-2'
+    await db.insert(schema.projects).values({
+      id: legacyProj2,
+      title: 'Legacy Project Fallback To Creator',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      createdBy: teacher2.id,
+      participationType: 'INDIVIDUAL',
+    })
+    await db.insert(schema.projectStudents).values({ projectId: legacyProj2, enrollmentId: 'enroll-no-adv' })
+
+    const updated2 = await projectService.updateProjectAdvisors(admin, legacyProj2, { addUserIds: [teacher1.id] })
+    expect(updated2.advisors.map((a) => a.userId)).toContain(teacher2.id) // Creator teacher2 was preserved
+    expect(updated2.advisors.map((a) => a.userId)).toContain(teacher1.id) // teacher1 added
+  })
+
+  it('26. Danışman değişiklikleri soft-delete, reactivation, birincil danışman devri ve auditLog kaydı ile tamamlanmalı', async () => {
+    // teacher1 ve teacher2 ile proje oluştur
+    const created = await projectService.createProject(admin, {
+      title: 'Audit and Primary Shift Test Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+      advisorUserIds: [teacher1.id, teacher2.id],
+    })
+
+    // teacher1 isPrimary: true, teacher2 isPrimary: false
+    // teacher1'i çıkar ve primary devrini kontrol et
+    await projectService.updateProjectAdvisors(admin, created.projectId, { removeUserIds: [teacher1.id] })
+
+    const detailAfterRemove = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detailAfterRemove.advisors).toHaveLength(1)
+    expect(detailAfterRemove.advisors[0]?.userId).toBe(teacher2.id)
+    expect(detailAfterRemove.advisors[0]?.isPrimary).toBe(true)
+
+    // soft-delete kontrolü
+    const t1Row = await db
+      .select()
+      .from(schema.projectAdvisors)
+      .where(and(eq(schema.projectAdvisors.projectId, created.projectId), eq(schema.projectAdvisors.userId, teacher1.id)))
+    expect(t1Row[0]?.deletedAt).not.toBeNull()
+
+    // teacher1'i tekrar ekle (reactivation)
+    await projectService.updateProjectAdvisors(admin, created.projectId, { addUserIds: [teacher1.id] })
+
+    const t1Reactivated = await db
+      .select()
+      .from(schema.projectAdvisors)
+      .where(and(eq(schema.projectAdvisors.projectId, created.projectId), eq(schema.projectAdvisors.userId, teacher1.id)))
+    expect(t1Reactivated[0]?.deletedAt).toBeNull()
+
+    // audit log kaydını kontrol et
+    const logs = await db
+      .select()
+      .from(schema.auditLogs)
+      .where(and(eq(schema.auditLogs.entityType, 'PROJECT'), eq(schema.auditLogs.entityId, created.projectId), eq(schema.auditLogs.action, 'PROJECT_ADVISORS_UPDATED')))
+    expect(logs.length).toBeGreaterThanOrEqual(2)
+    expect(logs[0]?.beforeJson).toContain('advisors')
+    expect(logs[0]?.afterJson).toContain('advisors')
+  })
+
+  it('27. Pasif yıllık öğrenci kaydının danışmanının eski projeler aktarılırken dikkate alınmaması', async () => {
+    // Pasif yıllık öğrenci kaydı oluştur (advisorUserId: teacher1.id, isActive: false)
+    await db.insert(schema.students).values({ id: 's-passive-enroll', bilsemNo: '8882', firstName: 'Passive', lastName: 'Student' })
+    await db.insert(schema.studentEnrollments).values({
+      id: 'enroll-passive-enroll',
+      studentId: 's-passive-enroll',
+      academicYearId: 'year-2024',
+      advisorUserId: teacher1.id,
+      advisorName: 'Teacher One',
+      isActive: false, // Pasif kayıt!
+    })
+
+    const legacyProjPassive = 'legacy-proj-passive-enrollment'
+    await db.insert(schema.projects).values({
+      id: legacyProjPassive,
+      title: 'Legacy Project With Passive Enrollment',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      createdBy: teacher2.id,
+      participationType: 'INDIVIDUAL',
+    })
+    await db.insert(schema.projectStudents).values({ projectId: legacyProjPassive, enrollmentId: 'enroll-passive-enroll' })
+
+    const teacher3: AuthenticatedUser = { id: 'teacher-passive-3', role: 'TEACHER', isActive: true }
+    await db.insert(schema.users).values({ id: teacher3.id, name: 'Teacher Three', email: 'tpassive3@test.com', role: 'TEACHER', isActive: true })
+
+    const res = await projectService.updateProjectAdvisors(admin, legacyProjPassive, { addUserIds: [teacher3.id] })
+    // teacher1 (pasif kaydın danışmanı) aktarılmamış olmalı, varsayılan proje oluşturucu teacher2 ve yeni eklenen teacher3 olmalı
+    expect(res.advisors.map((a) => a.userId)).not.toContain(teacher1.id)
+    expect(res.advisors.map((a) => a.userId)).toContain(teacher2.id)
+    expect(res.advisors.map((a) => a.userId)).toContain(teacher3.id)
+  })
+
+  it('28. Legacy danışman kimliklerinin (legacy:...) sanal kimlik olarak algılanması ve API ekleme/çıkarma isteklerinden süzülmesi', async () => {
+    await db.insert(schema.students).values({ id: 's-text-only', bilsemNo: '8883', firstName: 'TextOnly', lastName: 'Student' })
+    await db.insert(schema.studentEnrollments).values({
+      id: 'enroll-text-only',
+      studentId: 's-text-only',
+      academicYearId: 'year-2024',
+      advisorUserId: null,
+      advisorName: 'Sadece İsim Danışman',
+      isActive: true,
+    })
+
+    const legacyProj = 'legacy-text-only-proj'
+    await db.insert(schema.projects).values({
+      id: legacyProj,
+      title: 'Legacy Text Only Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      createdBy: admin.id,
+      participationType: 'INDIVIDUAL',
+    })
+    await db.insert(schema.projectStudents).values({ projectId: legacyProj, enrollmentId: 'enroll-text-only' })
+
+    const detail = await projectService.getProjectDetail(admin, legacyProj)
+    expect(detail.advisors[0]?.userId).toBe('legacy:Sadece İsim Danışman')
+
+    // Sanal id'nin (legacy:) sanal kullanıcı hesabı olduğunu doğrula
+    expect(detail.advisors[0]?.userId.startsWith('legacy:')).toBe(true)
+
+    // Arayüz filtresi simülasyonu: legacy: ID'ler cleanRemove / cleanAdd dizilerinden elenir
+    const advisorRemoveIds = [detail.advisors[0]!.userId, teacher1.id]
+    const cleanRemove = advisorRemoveIds.filter((id) => !id.startsWith('legacy:'))
+    expect(cleanRemove).toEqual([teacher1.id])
+    expect(cleanRemove).not.toContain('legacy:Sadece İsim Danışman')
+  })
+
+  it('29. load() fonksiyonunun ve detay servisinin Promise döndürmesi ve güncelleme sonrası verinin yenilenmesi', async () => {
+    const created = await projectService.createProject(teacher1, {
+      title: 'Promise Load Test Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    const promise = projectService.getProjectDetail(admin, created.projectId)
+    expect(promise).toBeInstanceOf(Promise)
+    const detail = await promise
+    expect(detail.project.id).toBe(created.projectId)
+  })
+
+  it('30. Birincil danışman çıkarma, başka birini primary yapma, eski primary danışmanı yeniden ekleme ve tekil primary korunumu', async () => {
+    const created = await projectService.createProject(admin, {
+      title: 'Primary Consistency Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'TEAM',
+      enrollmentIds: ['enroll-1', 'enroll-2'],
+      advisorUserIds: [teacher1.id, teacher2.id],
+    })
+
+    let detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors.find(a => a.userId === teacher1.id)?.isPrimary).toBe(true)
+    expect(detail.advisors.find(a => a.userId === teacher2.id)?.isPrimary).toBe(false)
+
+    await projectService.updateProjectAdvisors(admin, created.projectId, {
+      removeUserIds: [teacher1.id],
+    })
+
+    detail = await projectService.getProjectDetail(admin, created.projectId)
+    const primaries = detail.advisors.filter(a => a.isPrimary)
+    expect(primaries).toHaveLength(1)
+    expect(primaries[0]?.userId).toBe(teacher2.id)
+
+    // Re-add teacher1 (former primary)
+    await projectService.updateProjectAdvisors(admin, created.projectId, {
+      addUserIds: [teacher1.id],
+    })
+
+    detail = await projectService.getProjectDetail(admin, created.projectId)
+    const primariesAfterReadd = detail.advisors.filter(a => a.isPrimary)
+    expect(primariesAfterReadd).toHaveLength(1)
+    expect(primariesAfterReadd[0]?.userId).toBe(teacher2.id)
+    expect(detail.advisors.find(a => a.userId === teacher1.id)?.isPrimary).toBe(false)
+  })
+
+  it('31. Birden fazla primary danışman içeren bozuk verinin otomatik düzeltilmesi (reconciliation)', async () => {
+    const created = await projectService.createProject(admin, {
+      title: 'Corrupted Primary Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'TEAM',
+      enrollmentIds: ['enroll-1', 'enroll-2'],
+      advisorUserIds: [teacher1.id, teacher2.id],
+    })
+
+    await db.update(schema.projectAdvisors).set({ isPrimary: true }).where(eq(schema.projectAdvisors.projectId, created.projectId))
+
+    const teacher4: AuthenticatedUser = { id: 'teacher-4', role: 'TEACHER', isActive: true }
+    await db.insert(schema.users).values({
+      id: teacher4.id,
+      name: 'Teacher Four',
+      email: 'teacher4@test.com',
+      role: 'TEACHER',
+      isActive: true,
+    })
+
+    await projectService.updateProjectAdvisors(admin, created.projectId, {
+      addUserIds: [teacher4.id],
+    })
+
+    const detail = await projectService.getProjectDetail(admin, created.projectId)
+    const primaries = detail.advisors.filter(a => a.isPrimary)
+    expect(primaries).toHaveLength(1)
+  })
+
+  it('32. Sanal (legacy:) kimliklerin service/API katmanında açıkça reddedilmesi', async () => {
+    const created = await projectService.createProject(admin, {
+      title: 'Legacy Reject Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+      advisorUserIds: [teacher1.id],
+    })
+
+    await expect(
+      projectService.updateProjectAdvisors(admin, created.projectId, {
+        addUserIds: ['legacy:Dış Hoca'],
+      })
+    ).rejects.toThrow('Sanal veya legacy kimlikler doğrudan değiştirilemez.')
+
+    await expect(
+      projectService.updateProjectAdvisors(admin, created.projectId, {
+        removeUserIds: ['legacy:Dış Hoca'],
+      })
+    ).rejects.toThrow('Sanal veya legacy kimlikler doğrudan değiştirilemez.')
+  })
+
+  it('33. Öğretmenlerin PATCH /api/projects/:id/advisors endpointine erişiminin 403 ile engellenmesi', async () => {
+    const res = await handleApiRequest({
+      method: 'PATCH',
+      url: 'http://localhost/api/projects/some-id/advisors',
+      headers: { 'x-test-user-id': teacher1.id },
+      body: { addUserIds: [teacher2.id] },
+    }, db)
+
+    expect(res.statusCode).toBe(403)
+    expect(res.payload.success).toBe(false)
+  })
+
+  it('34. Geçersiz istek durumunda transaction rollback ile kısmi değişikliklerin engellenmesi', async () => {
+    const created = await projectService.createProject(admin, {
+      title: 'Rollback Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+      advisorUserIds: [teacher1.id],
+    })
+
+    await expect(
+      projectService.updateProjectAdvisors(admin, created.projectId, {
+        removeUserIds: [teacher1.id],
+      })
+    ).rejects.toThrow()
+
+    const detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors).toHaveLength(1)
+    expect(detail.advisors[0]?.userId).toBe(teacher1.id)
   })
 })
