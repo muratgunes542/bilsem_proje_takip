@@ -22,6 +22,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [passwordConfirmation, setPasswordConfirmation] = useState('')
+  const [rememberMe, setRememberMe] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -36,7 +37,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     }
     setBusy(true)
     try {
-      if (mode === 'login') await signIn(email, password)
+      if (mode === 'login') await signIn(email, password, rememberMe)
       else await signUp(name.trim(), email, password)
       const user = await apiRequest<UserProfile>('/api/me')
       onAuthenticated(user)
@@ -83,6 +84,12 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                 <div className="input-wrap"><input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'login' ? 'Parolanızı girin' : 'En az 8 karakter'} required /><LockKeyhole className="input-icon" size={17} /></div>
               </label>
               {mode === 'register' && <label className="field-label">Parola tekrarı<div className="input-wrap"><input type="password" autoComplete="new-password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} placeholder="Parolanızı yeniden girin" required /><LockKeyhole className="input-icon" size={17} /></div></label>}
+              {mode === 'login' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', cursor: 'pointer', margin: '6px 0 14px 0', color: '#334155' }}>
+                  <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />
+                  <span>Beni hatırla</span>
+                </label>
+              )}
               {error && <div className="form-error" role="alert">{error}</div>}
               <button className="button button-primary auth-submit" disabled={busy} type="submit">
                 {busy ? 'Kontrol ediliyor…' : mode === 'login' ? 'Giriş yap' : 'Öğretmen hesabı oluştur'}

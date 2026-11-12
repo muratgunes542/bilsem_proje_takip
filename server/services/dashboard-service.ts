@@ -1,7 +1,7 @@
 import { and, count, countDistinct, desc, eq, isNull } from 'drizzle-orm'
-import { AuthorizationError, type AuthenticatedUser } from '../authorization'
-import * as schema from '../db/schema'
-import type { AppDatabase } from './project-service'
+import { AuthorizationError, type AuthenticatedUser } from '../authorization.js'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from './project-service.js'
 
 export class DashboardService {
   constructor(private readonly database: AppDatabase) {}

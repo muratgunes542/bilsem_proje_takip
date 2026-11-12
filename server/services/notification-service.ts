@@ -1,7 +1,7 @@
 import { and, count, desc, eq } from 'drizzle-orm'
-import { AuthorizationError, canReadNotification, type AuthenticatedUser } from '../authorization'
-import * as schema from '../db/schema'
-import type { AppDatabase } from './project-service'
+import { AuthorizationError, canReadNotification, type AuthenticatedUser } from '../authorization.js'
+import * as schema from '../db/schema.js'
+import type { AppDatabase } from './project-service.js'
 
 export class NotificationService {
   constructor(private readonly database: AppDatabase) {}

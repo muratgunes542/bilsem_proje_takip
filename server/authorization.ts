@@ -1,4 +1,4 @@
-import type { UserRole } from './db/schema'
+import type { UserRole } from './db/schema.js'
 
 export type AuthenticatedUser = {
   id: string

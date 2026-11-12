@@ -31,3 +31,8 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+
+.vercel
+.env
+.env.*
+!.env.example

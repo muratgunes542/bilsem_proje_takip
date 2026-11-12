@@ -68,6 +68,7 @@ export const sessions = sqliteTable('sessions', {
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  lastActiveAt: integer('last_active_at', { mode: 'timestamp_ms' }).default(sql`(unixepoch() * 1000)`),
   ...timestamps,
 }, (table) => [index('sessions_user_id_idx').on(table.userId)])
 

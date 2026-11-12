@@ -2,23 +2,23 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { z } from 'zod'
-import { AuthorizationError } from '../authorization'
-import { createAuth } from '../auth'
-import { db } from '../db/client'
-import * as schema from '../db/schema'
-import { AcademicYearService } from '../services/academic-year-service'
-import { StudentImportService } from '../services/import-service'
-import { NotificationService } from '../services/notification-service'
-import { ProjectRuleError, ProjectService } from '../services/project-service'
-import { StudentRuleError, StudentService } from '../services/student-service'
-import { UserRuleError, UserService } from '../services/user-service'
-import { getAuthenticatedApiUser } from './context'
-import type { ApiResponse } from './types'
-import type { AppDatabase } from '../services/project-service'
-import { env } from '../env'
-import { ImportFileError, parseStudentWorkbook } from '../services/xlsx-import-parser'
-import { DashboardService } from '../services/dashboard-service'
-import { ReportService } from '../services/report-service'
+import { AuthorizationError } from '../authorization.js'
+import { createAuth } from '../auth.js'
+import { db } from '../db/client.js'
+import * as schema from '../db/schema.js'
+import { AcademicYearService } from '../services/academic-year-service.js'
+import { StudentImportService } from '../services/import-service.js'
+import { NotificationService } from '../services/notification-service.js'
+import { ProjectRuleError, ProjectService } from '../services/project-service.js'
+import { StudentRuleError, StudentService } from '../services/student-service.js'
+import { UserRuleError, UserService } from '../services/user-service.js'
+import { getAuthenticatedApiUser } from './context.js'
+import type { ApiResponse } from './types.js'
+import type { AppDatabase } from '../services/project-service.js'
+import { env } from '../env.js'
+import { ImportFileError, parseStudentWorkbook } from '../services/xlsx-import-parser.js'
+import { DashboardService } from '../services/dashboard-service.js'
+import { ReportService } from '../services/report-service.js'
 
 // Zod Schemas
 const createAcademicYearSchema = z.object({
@@ -37,6 +37,7 @@ const createProjectSchema = z.object({
   participationType: z.enum(['INDIVIDUAL', 'TEAM']),
   teamName: z.string().nullable().optional(),
   enrollmentIds: z.array(z.string().min(1)).min(1, 'En az bir öğrenci seçilmelidir.').max(50),
+  advisorUserIds: z.array(z.string().min(1)).optional(),
 })
 
 const updateProjectSchema = z.object({
@@ -50,10 +51,28 @@ const addTeamMemberSchema = z.object({
   enrollmentId: z.string().min(1, 'Öğrenci kayıt ID zorunludur.'),
 })
 
+const convertToTeamSchema = z.object({
+  teamName: z.string().trim().max(100, 'Takım adı en fazla 100 karakter olabilir.').nullable().optional(),
+  additionalEnrollmentIds: z.array(z.string().trim().min(1, 'Geçersiz öğrenci ID')).min(1, 'En az bir ek öğrenci seçilmelidir.').max(50, 'En fazla 50 öğrenci eklenebilir.'),
+})
+
+const convertToIndividualSchema = z.object({
+  selectedEnrollmentId: z.string().trim().min(1, 'Bireysel projede kalacak öğrenci seçilmelidir.'),
+})
+
+
+const updateProjectAdvisorsSchema = z.object({
+  addUserIds: z.array(z.string().min(1)).optional().default([]),
+  removeUserIds: z.array(z.string().min(1)).optional().default([]),
+}).strict()
+
 const updateUserSchema = z.object({
   role: z.enum(['ADMIN', 'TEACHER']).optional(),
   isActive: z.boolean().optional(),
 })
+const resetTeacherPasswordSchema = z.object({
+  customPassword: z.string().min(8, 'Parola en az 8 karakter olmalıdır.').max(128).optional(),
+}).optional()
 const createTeacherSchema = z.object({ name: z.string().trim().min(2, 'Ad soyad en az 2 karakter olmalıdır.').max(200), email: z.email('Geçerli bir e-posta adresi girin.').transform((email) => email.trim().toLowerCase()) }).strict()
 const changePasswordSchema = z.object({ currentPassword: z.string().min(1, 'Mevcut parola zorunludur.'), newPassword: z.string().min(8, 'Yeni parola en az 8 karakter olmalıdır.').max(128), newPasswordConfirmation: z.string().min(8, 'Parola tekrarı en az 8 karakter olmalıdır.') }).strict().refine((value) => value.newPassword === value.newPasswordConfirmation, { message: 'Yeni parolalar eşleşmiyor.', path: ['newPasswordConfirmation'] })
 
@@ -181,6 +200,15 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
         statusCode: 200,
         payload: { success: true, data: result.users, pagination: result.pagination },
       }
+    }
+
+    const resetUserPasswordMatch = pathname.match(/^\/api\/admin\/(?:users|teachers)\/([^/]+)\/reset-password$/)
+    if (method === 'POST' && resetUserPasswordMatch) {
+      const actor = requireAuth()
+      const targetUserId = resetUserPasswordMatch[1]!
+      const parsedBody = resetTeacherPasswordSchema.parse(req.body)
+      const result = await userService.resetTeacherPassword(actor, targetUserId, parsedBody?.customPassword)
+      return { statusCode: 200, payload: { success: true, data: result } }
     }
 
     const updateUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/)
@@ -412,7 +440,34 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       return { statusCode: 200, payload: { success: true, data: result } }
     }
 
-    // Project Detail, Update, Archive (DELETE /api/projects/:id)
+    const convertToTeamMatch = pathname.match(/^\/api\/projects\/([^/]+)\/convert-to-team$/)
+    if (method === 'POST' && convertToTeamMatch) {
+      const actor = requireAuth()
+      const projectId = convertToTeamMatch[1]!
+      const body = convertToTeamSchema.parse(req.body)
+      const result = await projectService.convertToTeam(actor, projectId, body)
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+    const convertToIndividualMatch = pathname.match(/^\/api\/projects\/([^/]+)\/convert-to-individual$/)
+    if (method === 'POST' && convertToIndividualMatch) {
+      const actor = requireAuth()
+      const projectId = convertToIndividualMatch[1]!
+      const body = convertToIndividualSchema.parse(req.body)
+      const result = await projectService.convertToIndividual(actor, projectId, body)
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+    const updateProjectAdvisorsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/advisors$/)
+    if (method === 'PATCH' && updateProjectAdvisorsMatch) {
+      const actor = requireAuth()
+      const projectId = updateProjectAdvisorsMatch[1]!
+      const input = updateProjectAdvisorsSchema.parse(req.body)
+      const result = await projectService.updateProjectAdvisors(actor, projectId, input)
+      return { statusCode: 200, payload: { success: true, data: result } }
+    }
+
+        // Project Detail, Update, Archive (DELETE /api/projects/:id)
     const projectDetailMatch = pathname.match(/^\/api\/projects\/([^/]+)$/)
     if (projectDetailMatch) {
       const actor = requireAuth()

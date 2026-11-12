@@ -144,7 +144,8 @@ describe('V1.8.3.5 Production Admin, Promotion, Password Reset & Security Tests'
     expect(activeSessions).toHaveLength(0)
   })
 
-  it('8a. Ensures atomic rollback when Better Auth password reset fails (old password & session preserved)', async () => {
+  it('8a. Pre-reset validation failure: Better Auth reset failure before password change (old password & session preserved)', async () => {
+    // Note: 8a tests validation failure occurring BEFORE password reset takes place.
     const authInstance = createAuth(db, false)
     const email = 'rollback.ba@example.test'
     const originalPassword = 'OriginalPass123!'
@@ -165,7 +166,7 @@ describe('V1.8.3.5 Production Admin, Promotion, Password Reset & Security Tests'
     expect(signIn.user.id).toBe(created.user.id)
   })
 
-  it('8b. Ensures atomic rollback when user update or audit log fails (old password & session preserved)', async () => {
+  it('8b. Post-reset failure rollback: Ensures atomic rollback when user update or audit log fails after password change (old password & session preserved, mustChangePassword restored)', async () => {
     const authInstance = createAuth(db, false)
     const email = 'rollback.audit@example.test'
     const originalPassword = 'OriginalPass123!'
@@ -179,16 +180,34 @@ describe('V1.8.3.5 Production Admin, Promotion, Password Reset & Security Tests'
       id: randomUUID(), userId: created.user.id, token: sessionToken, expiresAt: new Date(Date.now() + 3600000),
     })
 
+    const [initialUser] = await db.select({ mustChangePassword: schema.users.mustChangePassword })
+      .from(schema.users).where(eq(schema.users.id, created.user.id))
+    const initialMustChange = initialUser?.mustChangePassword
+
     await expect(resetTeacherPasswordByAdmin(db, {
       email,
       actorUserId: 'admin-actor-1',
     }, { simulateAuditLogFailure: true })).rejects.toThrow()
 
-    // Original password STILL WORKS
+    // 1. Original password STILL WORKS
     const signIn = await authInstance.api.signInEmail({
       body: { email, password: originalPassword },
     })
     expect(signIn.user.id).toBe(created.user.id)
+
+    // 2. Original session record is PRESERVED
+    const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.token, sessionToken))
+    expect(sessions).toHaveLength(1)
+
+    // 3. mustChangePassword is restored to initial value
+    const [restoredUser] = await db.select({ mustChangePassword: schema.users.mustChangePassword })
+      .from(schema.users).where(eq(schema.users.id, created.user.id))
+    expect(restoredUser?.mustChangePassword).toBe(initialMustChange)
+
+    // 4. Random/new temporary password fails to sign in
+    await expect(authInstance.api.signInEmail({
+      body: { email, password: 'NonExistentTempPassword999!' },
+    })).rejects.toThrow()
   })
 
   it('8c. Handles secondary rollback errors gracefully without swallowing primary error', async () => {

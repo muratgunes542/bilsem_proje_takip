@@ -195,7 +195,7 @@ export async function apiPageRequest<T>(path: string, init: RequestInit = {}): P
   }
 }
 
-async function authRequest(path: string, body: Record<string, string>) {
+async function authRequest(path: string, body: Record<string, string | boolean>) {
   let response: Response
   try {
     response = await fetch(`/api/auth/${path}`, {
@@ -211,7 +211,19 @@ async function authRequest(path: string, body: Record<string, string>) {
   if (!response.ok) throw new ApiError(result?.message ?? 'Kimlik doğrulama başarısız.', response.status, result?.code)
 }
 
-export const signIn = (email: string, password: string) => authRequest('sign-in/email', { email, password })
+
+export async function updateProjectAdvisors(
+  projectId: string,
+  input: { addUserIds?: string[]; removeUserIds?: string[] },
+) {
+  return apiRequest<{ projectId: string; advisors: Array<{ userId: string; name: string; email: string; isPrimary: boolean }> }>(
+    `/api/projects/${projectId}/advisors`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  )
+}
+
+export const signIn = (email: string, password: string, rememberMe = false) =>
+  authRequest('sign-in/email', { email, password, rememberMe })
 export const signUp = (name: string, email: string, password: string) => authRequest('sign-up/email', { name, email, password })
 
 export async function signOut() {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, FileSpreadsheet, FolderKanban, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, Search, Settings, Shield, Sparkles, Upload, Users, X } from 'lucide-react'
 import { z } from 'zod'
-import { apiRequest, ApiError, signOut, type AcademicYear, type ApiPage, type DashboardSummary, type Project, type ProjectOptions, type Role, type Student, type StudentProfile as StudentProfileData, type StudentProject, type UserProfile } from './lib/api'
+import { apiRequest, apiPageRequest, ApiError, signOut, updateProjectAdvisors, type AcademicYear, type ApiPage, type DashboardSummary, type Project, type ProjectOptions, type Role, type Student, type StudentProfile as StudentProfileData, type StudentProject, type UserProfile } from './lib/api'
 import { AuthScreen } from './components/AuthScreen'
 import { Reports } from './components/Reports'
 import './App.css'
@@ -49,7 +49,7 @@ export function App() {
     </aside>
     {mobileNav && <button className="nav-backdrop" onClick={() => setMobileNav(false)} aria-label="Menüyü kapat" />}
     <main className="main-area"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Menüyü aç"><Menu size={20} /></button><div className="breadcrumb"><span>Ünye BİLSEM</span><ChevronRight size={14} /><b>{titles[screen]}</b></div><div className="topbar-actions"><span className="today-label">{new Intl.DateTimeFormat('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</span><button className="icon-button notification-button" title="Bildirimler" onClick={() => setScreen('notifications')}><Bell size={18} /></button><div className="avatar avatar-small">{user.name.slice(0, 1).toLocaleUpperCase('tr-TR')}</div></div></header>
-      <div className="page-content">{screen === 'dashboard' && <Dashboard user={user} refreshKey={refreshKey} go={setScreen} />}{screen === 'reports' && <Reports role={user.role} onOpenStudent={(id) => { setSelectedStudent(id); setScreen('student-profile') }} onOpenProject={(id) => { setSelectedProject(id); setScreen('project-detail') }} />}{screen === 'students' && <Students refreshKey={refreshKey} user={user} onOpen={(id) => { setSelectedStudent(id); setScreen('student-profile') }} />}{screen === 'student-profile' && selectedStudent && <StudentProfile studentId={selectedStudent} user={user} onBack={() => setScreen('students')} />}{screen === 'projects' && <Projects refreshKey={refreshKey} user={user} onOpen={(id) => { setSelectedProject(id); setScreen('project-detail') }} />}{screen === 'new-project' && <ProjectCreate onCreated={(id, warning) => { setSelectedProject(id); refresh(); setScreen('project-detail'); notify(warning ?? 'Proje oluşturuldu.', warning ? 'error' : 'success') }} />}{screen === 'project-detail' && selectedProject && <ProjectDetail projectId={selectedProject} user={user} onBack={() => setScreen('projects')} notify={notify} refresh={refresh} />}{screen === 'imports' && <ExcelImport notify={notify} refresh={refresh} />}{screen === 'users' && <UsersAdmin refreshKey={refreshKey} notify={notify} user={user} />}{screen === 'years' && <AcademicYears refreshKey={refreshKey} notify={notify} />}{screen === 'notifications' && <Notifications refreshKey={refreshKey} />}{screen === 'account' && <PasswordSettings onSaved={() => notify('Parolanız değiştirildi. Bu oturum açık kalır; diğer oturumlar kapatıldı.')} />}</div>
+      <div className="page-content">{screen === 'dashboard' && <Dashboard user={user} refreshKey={refreshKey} go={setScreen} />}{screen === 'reports' && <Reports role={user.role} onOpenStudent={(id) => { setSelectedStudent(id); setScreen('student-profile') }} onOpenProject={(id) => { setSelectedProject(id); setScreen('project-detail') }} />}{screen === 'students' && <Students refreshKey={refreshKey} user={user} onOpen={(id) => { setSelectedStudent(id); setScreen('student-profile') }} />}{screen === 'student-profile' && selectedStudent && <StudentProfile studentId={selectedStudent} user={user} onBack={() => setScreen('students')} />}{screen === 'projects' && <Projects refreshKey={refreshKey} user={user} onOpen={(id) => { setSelectedProject(id); setScreen('project-detail') }} />}{screen === 'new-project' && <ProjectCreate user={user} onCreated={(id, warning) => { setSelectedProject(id); refresh(); setScreen('project-detail'); notify(warning ?? 'Proje oluşturuldu.', warning ? 'error' : 'success') }} />}{screen === 'project-detail' && selectedProject && <ProjectDetail projectId={selectedProject} user={user} onBack={() => setScreen('projects')} notify={notify} refresh={refresh} />}{screen === 'imports' && <ExcelImport notify={notify} refresh={refresh} />}{screen === 'users' && <UsersAdmin refreshKey={refreshKey} notify={notify} user={user} />}{screen === 'years' && <AcademicYears refreshKey={refreshKey} notify={notify} />}{screen === 'notifications' && <Notifications refreshKey={refreshKey} />}{screen === 'account' && <PasswordSettings onSaved={() => notify('Parolanız değiştirildi. Bu oturum açık kalır; diğer oturumlar kapatıldı.')} />}</div>
     </main>{toast && <div className={`toast toast-${toast.type}`} role="status">{toast.type === 'success' ? <Check size={17} /> : <Activity size={17} />}{toast.message}<button className="icon-button" onClick={() => setToast(null)} aria-label="Kapat"><X size={15} /></button></div>}
   </div>
 }
@@ -222,24 +222,244 @@ function Projects({ refreshKey, user, onOpen }: { refreshKey: number; user: User
 }
 type ProjectDetailData = { project: Project & { deletedAt: string | null }; students: Array<{ enrollmentId: string; studentId: string; bilsemNo: string; firstName: string; lastName: string; gradeLevel: number | null; className: string | null }>; advisors: Array<{ userId: string; name: string; email: string; isPrimary: boolean }> }
 function ProjectDetail({ projectId, user, onBack, notify, refresh }: { projectId: string; user: UserProfile; onBack: () => void; notify: (message: string, type?: Toast['type']) => void; refresh: () => void }) {
-  const [detail, setDetail] = useState<ProjectDetailData | null>(null); const [options, setOptions] = useState<ProjectOptions | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState<unknown>(null); const [editing, setEditing] = useState(false); const [showDeleteModal, setShowDeleteModal] = useState(false); const [form, setForm] = useState({ title: '', description: '', statusId: '', teamName: '' });
-  const load = useCallback(() => { setError(null); void Promise.all([apiRequest<ProjectDetailData>(`/api/projects/${projectId}`), apiRequest<ProjectOptions>('/api/project-options')]).then(([d, o]) => { setDetail(d); setOptions(o); setForm({ title: d.project.title, description: d.project.description ?? '', statusId: d.project.statusId, teamName: d.project.teamName ?? '' }) }).catch(setError) }, [projectId]); useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load]);
-  if (error) return <><button className="text-button" onClick={onBack}><ChevronLeft size={15} /> Projelere dön</button><ErrorState error={error} retry={load} /></>; if (!detail) return <LoadingState />;
+  const [detail, setDetail] = useState<ProjectDetailData | null>(null); const [options, setOptions] = useState<ProjectOptions | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState<unknown>(null); const [editing, setEditing] = useState(false); const [showDeleteModal, setShowDeleteModal] = useState(false); const [showAddStudentModal, setShowAddStudentModal] = useState(false); const [availableStudents, setAvailableStudents] = useState<Student[]>([]); const [studentSearch, setStudentSearch] = useState(''); const [studentSearchPage, setStudentSearchPage] = useState(1); const [studentSearchTotalPages, setStudentSearchTotalPages] = useState(1); const [form, setForm] = useState({ title: '', description: '', statusId: '', teamName: '' });
+
+  const [showConvertToTeamModal, setShowConvertToTeamModal] = useState(false);
+  const [convertTeamName, setConvertTeamName] = useState('');
+  const [convertAdditionalIds, setConvertAdditionalIds] = useState<string[]>([]);
+  const [convertModalSearch, setConvertModalSearch] = useState('');
+  const [convertModalPage, setConvertModalPage] = useState(1);
+  const [convertAvailableStudents, setConvertAvailableStudents] = useState<Student[]>([]);
+  const [convertSearchTotalPages, setConvertSearchTotalPages] = useState(1);
+
+  const [showConvertToIndividualModal, setShowConvertToIndividualModal] = useState(false);
+  const [selectedIndividualEnrollmentId, setSelectedIndividualEnrollmentId] = useState('');
+
+  const [showAdvisorModal, setShowAdvisorModal] = useState(false);
+  const [advisorAddIds, setAdvisorAddIds] = useState<string[]>([]);
+  const [advisorRemoveIds, setAdvisorRemoveIds] = useState<string[]>([]);
+  const [advisorBusy, setAdvisorBusy] = useState(false);
+  const [advisorError, setAdvisorError] = useState('');
+
+  const load = useCallback(() => {
+    setError(null);
+    return Promise.all([
+      apiRequest<ProjectDetailData>(`/api/projects/${projectId}`),
+      apiRequest<ProjectOptions>('/api/project-options'),
+    ]).then(([d, o]) => {
+      setDetail(d);
+      setOptions(o);
+      setForm({ title: d.project.title, description: d.project.description ?? '', statusId: d.project.statusId, teamName: d.project.teamName ?? '' });
+      return { detail: d, options: o };
+    }).catch((err) => {
+      setError(err);
+      throw err;
+    });
+  }, [projectId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load().catch(() => {});
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  const loadModalStudents = useCallback(async (searchQuery: string, pageNum: number) => {
+    if (!detail) return;
+    try {
+      const q = new URLSearchParams({ academicYearId: detail.project.academicYearId, page: String(pageNum), pageSize: '20' });
+      if (searchQuery.trim()) q.set('search', searchQuery.trim());
+      const res = await apiPageRequest<Student>(`/api/students?${q}`);
+      const existingIds = new Set(detail.students.map((s) => s.enrollmentId));
+      setAvailableStudents(res.data.filter((s: Student) => !existingIds.has(s.enrollmentId)));
+      setStudentSearchTotalPages(res.pagination.totalPages);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Öğrenciler yüklenemedi.', 'error');
+    }
+  }, [detail, notify]);
+
+  const loadConvertModalStudents = useCallback(async (searchQuery: string, pageNum: number) => {
+    if (!detail) return;
+    try {
+      const q = new URLSearchParams({ academicYearId: detail.project.academicYearId, page: String(pageNum), pageSize: '20' });
+      if (searchQuery.trim()) q.set('search', searchQuery.trim());
+      const res = await apiPageRequest<Student>(`/api/students?${q}`);
+      const existingIds = new Set(detail.students.map((s) => s.enrollmentId));
+      setConvertAvailableStudents(res.data.filter((s: Student) => !existingIds.has(s.enrollmentId)));
+      setConvertSearchTotalPages(res.pagination.totalPages);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Öğrenciler yüklenemedi.', 'error');
+    }
+  }, [detail, notify]);
+
+  useEffect(() => {
+    if (!showAddStudentModal || !detail) return;
+    const timer = window.setTimeout(() => {
+      void loadModalStudents(studentSearch, studentSearchPage);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [showAddStudentModal, studentSearch, studentSearchPage, loadModalStudents, detail]);
+
+  useEffect(() => {
+    if (!showConvertToTeamModal || !detail) return;
+    const timer = window.setTimeout(() => {
+      void loadConvertModalStudents(convertModalSearch, convertModalPage);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [showConvertToTeamModal, convertModalSearch, convertModalPage, loadConvertModalStudents, detail]);
+
+  if (error) return <><button className="text-button" onClick={onBack}><ChevronLeft size={15} /> Projelere dön</button><ErrorState error={error} retry={load} /></>;
+  if (!detail) return <LoadingState />;
+
   const p = detail.project; const canEdit = !p.deletedAt && (user.role === 'ADMIN' || p.createdBy === user.id); const canArchive = !p.deletedAt && (user.role === 'ADMIN' || p.createdBy === user.id); const canDelete = user.role === 'ADMIN' || p.createdBy === user.id;
+
   async function save(e: FormEvent) { e.preventDefault(); setBusy(true); try { await apiRequest(`/api/projects/${projectId}`, { method: 'PATCH', body: JSON.stringify({ title: form.title.trim(), description: form.description.trim() || null, statusId: form.statusId, teamName: p.participationType === 'TEAM' ? form.teamName.trim() || null : null }) }); notify('Proje güncellendi.'); setEditing(false); refresh(); await load() } catch (err) { notify(err instanceof Error ? err.message : 'Proje güncellenemedi.', 'error') } finally { setBusy(false) } }
   async function archive() { setBusy(true); try { await apiRequest(`/api/projects/${projectId}/archive`, { method: 'POST' }); notify('Proje arşivlendi.'); refresh(); await load() } catch (err) { notify(err instanceof Error ? err.message : 'Proje arşivlenemedi.', 'error') } finally { setBusy(false) } }
   async function restore() { setBusy(true); try { await apiRequest(`/api/projects/${projectId}/restore`, { method: 'POST' }); notify('Proje geri yüklendi.'); refresh(); await load() } catch (err) { notify(err instanceof Error ? err.message : 'Proje geri yüklenemedi.', 'error') } finally { setBusy(false) } }
   async function deleteProject() { setBusy(true); try { await apiRequest(`/api/projects/${projectId}`, { method: 'DELETE' }); notify('Proje kalıcı olarak silindi.'); refresh(); onBack() } catch (err) { notify(err instanceof Error ? err.message : 'Proje silinemedi.', 'error') } finally { setBusy(false); setShowDeleteModal(false) } }
-  return <><button className="text-button project-back" onClick={onBack}><ChevronLeft size={15} /> Projelere dön</button><PageHeading eyebrow="PROJE AYRINTISI" title={p.title} description={`${p.categoryName} · ${p.academicYearName}`} action={<span className="badge badge-neutral">{p.statusName}</span>} />{p.deletedAt && <div className="info-note project-archived-note"><b>Bu proje arşivlenmiş.</b><p>Normal proje listesinde görünmez ve düzenlemeye kapalıdır.</p></div>}<div className="project-detail-layout"><section className="panel project-detail-main"><div className="panel-heading"><div><h3>Proje bilgileri</h3><p>{p.participationType === 'TEAM' ? `Takım projesi${p.teamName ? ` · ${p.teamName}` : ''}` : 'Bireysel proje'}</p></div>{canEdit && <button className="button button-secondary" onClick={() => setEditing(!editing)}>{editing ? 'Düzenlemeyi kapat' : 'Düzenle'}</button>}</div>{editing && canEdit ? <form className="project-edit-form" onSubmit={(e) => void save(e)}><label className="field-label">Proje adı<input className="text-input" maxLength={200} required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label><label className="field-label">Açıklama<textarea className="text-input" rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><div className="form-two-col"><label className="field-label">Durum<select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>{options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{p.participationType === 'TEAM' && <label className="field-label">Takım adı<input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} /></label>}</div><button className="button button-primary" disabled={busy}>Değişiklikleri kaydet</button></form> : <div className="project-info-grid"><div><small>AÇIKLAMA</small><p>{p.description || 'Açıklama eklenmemiş.'}</p></div><div><small>AKADEMİK YIL</small><b>{p.academicYearName}</b></div><div><small>KATEGORİ</small><b>{p.categoryName}</b></div><div><small>DURUM</small><b>{p.statusName}</b></div><div><small>KATILIM</small><b>{p.participationType === 'TEAM' ? `Takım${p.teamName ? ` · ${p.teamName}` : ''}` : 'Bireysel'}</b></div><div><small>OLUŞTURAN ÖĞRETMEN</small><b>{p.creatorName}</b></div><div><small>DANIŞMAN ÖĞRETMENLER</small><b>{detail.advisors.length ? detail.advisors.map((a) => a.name).join(', ') : 'Danışman atanmamış'}</b></div></div>}<div className="project-members"><h3>İlgili öğrenciler <span>{detail.students.length}</span></h3>{detail.students.map((s) => <div className="project-member" key={s.enrollmentId}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo}{s.className ? ` · ${s.className}` : ''}</small></div>)}</div></section><aside className="panel project-actions"><h3>Proje işlemleri</h3><p>{p.createdBy === user.id ? 'Bu projeyi siz oluşturdunuz.' : 'Oluşturan öğretmen: ' + p.creatorName}</p>{canArchive && <button className="button button-secondary" disabled={busy} onClick={() => void archive()}>Projeyi arşivle</button>}{p.deletedAt && user.role === 'ADMIN' && <button className="button button-primary" disabled={busy} onClick={() => void restore()}>Arşivden geri yükle</button>}{canDelete && <button className="button button-danger" disabled={busy} onClick={() => setShowDeleteModal(true)}>Projeyi sil</button>}{!canEdit && !p.deletedAt && <small>Düzenleme yalnızca projeyi oluşturan öğretmen ve yöneticiler tarafından yapılabilir.</small>}</aside></div>{showDeleteModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Projeyi Kalıcı Olarak Sil</h3><p><b>{p.title}</b> adlı projeyi kalıcı olarak silmek istediğinize emin misiniz?</p>{detail.students.length > 0 && <div className="modal-members-note"><small>Projedeki katılımcı öğrenciler:</small><span>{detail.students.map((s) => `${s.firstName} ${s.lastName}`).join(', ')}</span></div>}<p className="modal-warning">Bu işlem geri alınamaz ve projedeki tüm takım/öğrenci ilişkileri kaldırılır.</p><div className="modal-actions"><button className="button button-secondary" disabled={busy} onClick={() => setShowDeleteModal(false)}>İptal</button><button className="button button-danger" disabled={busy} onClick={() => void deleteProject()}>{busy ? 'Siliniyor…' : 'Evet, kalıcı olarak sil'}</button></div></div></div>}</>
+
+  async function openAddStudentModal() {
+    if (!detail) return;
+    setStudentSearch('');
+    setStudentSearchPage(1);
+    await loadModalStudents('', 1);
+    setShowAddStudentModal(true);
+  }
+
+  function openConvertToTeamModal() {
+    if (!detail) return;
+    setConvertTeamName('');
+    setConvertAdditionalIds([]);
+    setConvertModalSearch('');
+    setConvertModalPage(1);
+    setShowConvertToTeamModal(true);
+  }
+
+  async function convertToTeam() {
+    if (convertAdditionalIds.length === 0) {
+      notify('Takım projesine dönüştürmek için en az bir ek öğrenci seçilmelidir.', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await apiRequest<{ projectId: string; conflicts: Array<{ studentId: string; title: string; ownerName: string }> }>(
+        `/api/projects/${projectId}/convert-to-team`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ teamName: convertTeamName.trim() || null, additionalEnrollmentIds: convertAdditionalIds }),
+        }
+      );
+      notify(res.conflicts.length ? `Proje takıma dönüştürüldü. ${res.conflicts.length} öğrenci için çakışma uyarısı verildi.` : 'Proje takım projesine dönüştürüldü.');
+      setShowConvertToTeamModal(false);
+      await load();
+      refresh();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Dönüştürme başarısız.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openConvertToIndividualModal() {
+    if (!detail || !detail.students.length) return;
+    setSelectedIndividualEnrollmentId(detail.students[0]?.enrollmentId ?? '');
+    setShowConvertToIndividualModal(true);
+  }
+
+  async function convertToIndividual() {
+    if (!selectedIndividualEnrollmentId) {
+      notify('Lütfen projede kalacak öğrenciyi seçin.', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiRequest(`/api/projects/${projectId}/convert-to-individual`, {
+        method: 'POST',
+        body: JSON.stringify({ selectedEnrollmentId: selectedIndividualEnrollmentId }),
+      });
+      notify('Proje bireysel projeye dönüştürüldü.');
+      setShowConvertToIndividualModal(false);
+      await load();
+      refresh();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Dönüştürme başarısız.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addMember(enrollmentId: string) {
+    setBusy(true);
+    try {
+      await apiRequest(`/api/projects/${projectId}/members`, { method: 'POST', body: JSON.stringify({ enrollmentId }) });
+      notify('Öğrenci projeye eklendi.');
+      await load();
+      setShowAddStudentModal(false);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Öğrenci eklenemedi.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeMember(enrollmentId: string) {
+    if (!detail) return;
+    if (detail.students.length <= 2 && p.participationType === 'TEAM') {
+      notify('Takım projesinde en az iki öğrenci bulunmalıdır.', 'error');
+      return;
+    }
+    if (!window.confirm('Bu öğrenciyi projeden çıkarmak istediğinize emin misiniz?')) return;
+    setBusy(true);
+    try {
+      await apiRequest(`/api/projects/${projectId}/members/${enrollmentId}`, { method: 'DELETE' });
+      notify('Öğrenci projeden çıkarıldı.');
+      await load();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Öğrenci çıkarılamadı.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openAdvisorModal() {
+    setAdvisorAddIds([]);
+    setAdvisorRemoveIds([]);
+    setAdvisorError('');
+    setShowAdvisorModal(true);
+  }
+
+  async function saveAdvisors() {
+    const cleanAdd = advisorAddIds.filter((id) => !id.startsWith('legacy:'));
+    const cleanRemove = advisorRemoveIds.filter((id) => !id.startsWith('legacy:'));
+    if (cleanAdd.length === 0 && cleanRemove.length === 0) {
+      setAdvisorError('En az bir danışman ekleme veya çıkarma işlemi yapın.');
+      return;
+    }
+    setAdvisorBusy(true);
+    setAdvisorError('');
+    try {
+      await updateProjectAdvisors(projectId, { addUserIds: cleanAdd, removeUserIds: cleanRemove });
+      notify('Danışmanlar güncellendi.');
+      setShowAdvisorModal(false);
+      await load();
+      refresh();
+    } catch (err) {
+      setAdvisorError(err instanceof Error ? err.message : 'Danışmanlar güncellenemedi.');
+    } finally {
+      setAdvisorBusy(false);
+    }
+  }
+
+  return <><button className="text-button project-back" onClick={onBack}><ChevronLeft size={15} /> Projelere dön</button><PageHeading eyebrow="PROJE AYRINTISI" title={p.title} description={`${p.categoryName} · ${p.academicYearName}`} action={<span className="badge badge-neutral">{p.statusName}</span>} />{p.deletedAt && <div className="info-note project-archived-note"><b>Bu proje arşivlenmiş.</b><p>Normal proje listesinde görünmez ve düzenlemeye kapalıdır.</p></div>}<div className="project-detail-layout"><section className="panel project-detail-main"><div className="panel-heading"><div><h3>Proje bilgileri</h3><p>{p.participationType === 'TEAM' ? `Takım projesi${p.teamName ? ` · ${p.teamName}` : ''}` : 'Bireysel proje'}</p></div>{canEdit && <button className="button button-secondary" onClick={() => setEditing(!editing)}>{editing ? 'Düzenlemeyi kapat' : 'Düzenle'}</button>}</div>{editing && canEdit ? <form className="project-edit-form" onSubmit={(e) => void save(e)}><label className="field-label">Proje adı<input className="text-input" maxLength={200} required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label><label className="field-label">Açıklama<textarea className="text-input" rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><div className="form-two-col"><label className="field-label">Durum<select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>{options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{p.participationType === 'TEAM' && <label className="field-label">Takım adı<input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} /></label>}</div><button className="button button-primary" disabled={busy}>Değişiklikleri kaydet</button></form> : <div className="project-info-grid"><div><small>AÇIKLAMA</small><p>{p.description || 'Açıklama eklenmemiş.'}</p></div><div><small>AKADEMİK YIL</small><b>{p.academicYearName}</b></div><div><small>KATEGORİ</small><b>{p.categoryName}</b></div><div><small>DURUM</small><b>{p.statusName}</b></div><div><small>KATILIM</small><b>{p.participationType === 'TEAM' ? `Takım${p.teamName ? ` · ${p.teamName}` : ''}` : 'Bireysel'}</b></div><div><small>OLUŞTURAN ÖĞRETMEN</small><b>{p.creatorName}</b></div><div><small>DANIŞMAN ÖĞRETMENLER</small><b>{detail.advisors.length ? detail.advisors.map((a) => a.name).join(', ') : 'Danışman atanmamış'}</b></div></div>}<div className="project-members"><div className="panel-heading" style={{ padding: 0, marginBottom: 10 }}><h3>İlgili öğrenciler <span>{detail.students.length}</span></h3>{canEdit && p.participationType === 'TEAM' && <button className="button button-secondary button-small" disabled={busy} onClick={() => void openAddStudentModal()}>+ Öğrenci ekle</button>}</div>{detail.students.map((s) => <div className="project-member" key={s.enrollmentId}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0 }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo}{s.className ? ` · ${s.className}` : ''}</small></div>{canEdit && p.participationType === 'TEAM' && detail.students.length > 2 && <button className="icon-button" title="Öğrenciyi çıkar" disabled={busy} onClick={() => void removeMember(s.enrollmentId)}><X size={15} /></button>}</div>)}</div></section><aside className="panel project-actions"><h3>Proje işlemleri</h3><p>{p.createdBy === user.id ? 'Bu projeyi siz oluşturdunuz.' : 'Oluşturan öğretmen: ' + p.creatorName}</p>{user.role === 'ADMIN' && !p.deletedAt && <button className="button button-secondary" disabled={busy} onClick={() => void openAdvisorModal()}>Danışmanları Düzenle</button>}{canEdit && !p.deletedAt && p.participationType === 'INDIVIDUAL' && <button className="button button-primary" disabled={busy} onClick={openConvertToTeamModal}>Takım Projesine Dönüştür</button>}{canEdit && !p.deletedAt && p.participationType === 'TEAM' && <button className="button button-secondary" disabled={busy} onClick={openConvertToIndividualModal}>Bireysel Projeye Dönüştür</button>}{canArchive && <button className="button button-secondary" disabled={busy} onClick={() => void archive()}>Projeyi arşivle</button>}{p.deletedAt && user.role === 'ADMIN' && <button className="button button-primary" disabled={busy} onClick={() => void restore()}>Arşivden geri yükle</button>}{canDelete && <button className="button button-danger" disabled={busy} onClick={() => setShowDeleteModal(true)}>Projeyi sil</button>}{!canEdit && !p.deletedAt && <small>Düzenleme yalnızca projeyi oluşturan öğretmen ve yöneticiler tarafından yapılabilir.</small>}</aside></div>{showDeleteModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Projeyi Kalıcı Olarak Sil</h3><p><b>{p.title}</b> adlı projeyi kalıcı olarak silmek istediğinize emin misiniz?</p>{detail.students.length > 0 && <div className="modal-members-note"><small>Projedeki katılımcı öğrenciler:</small><span>{detail.students.map((s) => `${s.firstName} ${s.lastName}`).join(', ')}</span></div>}<p className="modal-warning">Bu işlem geri alınamaz ve projedeki tüm takım/öğrenci ilişkileri kaldırılır.</p><div className="modal-actions"><button className="button button-secondary" disabled={busy} onClick={() => setShowDeleteModal(false)}>İptal</button><button className="button button-danger" disabled={busy} onClick={() => void deleteProject()}>{busy ? 'Siliniyor…' : 'Evet, kalıcı olarak sil'}</button></div></div></div>}{showAddStudentModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Projeye Öğrenci Ekle</h3><p><b>{p.title}</b> projesine katılacak öğrenciyi seçin.</p><div className="search-wrap student-picker-search"><Search size={16} /><input value={studentSearch} onChange={(e) => { setStudentSearch(e.target.value); setStudentSearchPage(1); }} placeholder="İsim veya BİLSEM no ile ara" /></div><div className="student-picker modal-student-picker">{availableStudents.length ? availableStudents.map((s) => <button type="button" className="student-option modal-student-option" key={s.enrollmentId} disabled={busy} onClick={() => void addMember(s.enrollmentId)}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></div><span className="button button-secondary button-small">Ekle</span></button>) : <div className="mini-empty">Eklenebilecek uygun öğrenci bulunamadı.</div>}</div>{studentSearchTotalPages > 1 && <div className="pagination" style={{ padding: '8px 0' }}><button type="button" className="button button-secondary button-small" disabled={studentSearchPage <= 1} onClick={() => setStudentSearchPage((page) => Math.max(1, page - 1))}>Önceki</button><span><b>{studentSearchPage}</b> / {studentSearchTotalPages}</span><button type="button" className="button button-secondary button-small" disabled={studentSearchPage >= studentSearchTotalPages} onClick={() => setStudentSearchPage((page) => Math.min(studentSearchTotalPages, page + 1))}>Sonraki</button></div>}<div className="modal-actions" style={{ marginTop: '15px' }}><button type="button" className="button button-secondary" onClick={() => setShowAddStudentModal(false)}>Kapat</button></div></div></div>}{showConvertToTeamModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Takım Projesine Dönüştür</h3><p><b>{p.title}</b> projesini takım çalışmasına dönüştürmek için ek öğrenci ve isteğe bağlı takım adı girin.</p><label className="field-label" style={{ marginTop: 10 }}>Takım adı (isteğe bağlı)<input className="text-input" value={convertTeamName} onChange={(e) => setConvertTeamName(e.target.value)} placeholder="Örn: Genç Araştırmacılar" /></label><div className="search-wrap student-picker-search" style={{ marginTop: 10 }}><Search size={16} /><input value={convertModalSearch} onChange={(e) => { setConvertModalSearch(e.target.value); setConvertModalPage(1); }} placeholder="Ek öğrenci ara" /></div><div className="student-picker modal-student-picker">{convertAvailableStudents.length ? convertAvailableStudents.map((s) => { const isSelected = convertAdditionalIds.includes(s.enrollmentId); return <button type="button" className={`student-option modal-student-option ${isSelected ? 'selected' : ''}`} key={s.enrollmentId} onClick={() => { setConvertAdditionalIds(isSelected ? convertAdditionalIds.filter((id) => id !== s.enrollmentId) : [...convertAdditionalIds, s.enrollmentId]); }}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></div><span className={`button button-small ${isSelected ? 'button-primary' : 'button-secondary'}`}>{isSelected ? 'Seçildi' : 'Seç'}</span></button> }) : <div className="mini-empty">Eklenebilecek ek öğrenci bulunamadı.</div>}</div>{convertSearchTotalPages > 1 && <div className="pagination" style={{ padding: '8px 0' }}><button type="button" className="button button-secondary button-small" disabled={convertModalPage <= 1} onClick={() => setConvertModalPage((page) => Math.max(1, page - 1))}>Önceki</button><span><b>{convertModalPage}</b> / {convertSearchTotalPages}</span><button type="button" className="button button-secondary button-small" disabled={convertModalPage >= convertSearchTotalPages} onClick={() => setConvertModalPage((page) => Math.min(convertSearchTotalPages, page + 1))}>Sonraki</button></div>}<div className="modal-actions" style={{ marginTop: 15 }}><button type="button" className="button button-secondary" disabled={busy} onClick={() => setShowConvertToTeamModal(false)}>İptal</button><button type="button" className="button button-primary" disabled={busy || convertAdditionalIds.length === 0} onClick={() => void convertToTeam()}>{busy ? 'Dönüştürülüyor…' : 'Takım Projesine Dönüştür'}</button></div></div></div>}{showConvertToIndividualModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Bireysel Projeye Dönüştür</h3><p><b>{p.title}</b> projesinde kalacak tek öğrenciyi seçin. Çıkarılan öğrencilerin proje bağlantısı kaldırılacaktır.</p><div className="student-picker modal-student-picker" style={{ marginTop: 10 }}>{detail.students.map((s) => { const isSelected = selectedIndividualEnrollmentId === s.enrollmentId; return <button type="button" key={s.enrollmentId} className={`student-option modal-student-option ${isSelected ? 'selected' : ''}`} style={{ cursor: 'pointer', textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '10px' }} onClick={() => setSelectedIndividualEnrollmentId(s.enrollmentId)}><input type="radio" name="individualStudent" checked={isSelected} onChange={() => setSelectedIndividualEnrollmentId(s.enrollmentId)} /><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0 }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo}</small></div><span className={`check-box ${isSelected ? 'check-box-active' : ''}`} style={{ opacity: isSelected ? 1 : 0.4 }}><Check size={14} /></span></button> })}</div>{(() => { const selectedStudent = detail.students.find((s) => s.enrollmentId === selectedIndividualEnrollmentId); return selectedStudent ? <div className="selected-student-summary" style={{ marginTop: 12, padding: '8px 12px', background: '#e0f2fe', borderRadius: '6px', fontSize: '13px', color: '#0369a1' }}><b>Projede kalacak öğrenci:</b> {personName(selectedStudent.firstName, selectedStudent.lastName)}</div> : null })()}<div className="modal-actions" style={{ marginTop: 15 }}><button type="button" className="button button-secondary" disabled={busy} onClick={() => setShowConvertToIndividualModal(false)}>İptal</button><button type="button" className="button button-primary" disabled={busy || !selectedIndividualEnrollmentId} onClick={() => void convertToIndividual()}>{busy ? 'Dönüştürülüyor…' : 'Bireysel Projeye Dönüştür'}</button></div></div></div>}{showAdvisorModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Danışmanları Düzenle</h3><p>Mevcut danışmanları çıkarın veya yeni danışman ekleyin. En az bir aktif danışman bulunmalıdır.</p><div style={{marginBottom:'10px'}}><b>Mevcut Danışmanlar</b>{detail.advisors.map((a) => { const isLegacy = a.userId.startsWith('legacy:'); return <div key={a.userId} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',borderBottom:'1px solid #e2e8f0'}}><span style={{flex:1}}>{a.name}{a.isPrimary ? ' ★' : ''}</span>{isLegacy ? <small style={{color:'#64748b',fontSize:'12px'}}>Eski kayıt – yönetilebilir kullanıcı hesabı değil</small> : !advisorRemoveIds.includes(a.userId) ? <button type="button" className="button button-secondary button-small" onClick={() => setAdvisorRemoveIds([...advisorRemoveIds, a.userId])}>Çıkar</button> : <button type="button" className="button button-primary button-small" onClick={() => setAdvisorRemoveIds(advisorRemoveIds.filter(id => id !== a.userId))}>Geri Al</button>}</div> })}</div>{options?.teachers && options.teachers.length > 0 && <div style={{marginBottom:'10px'}}><b>Yeni Danışman Ekle</b><div className="student-picker" style={{maxHeight:'150px',marginTop:'6px'}}>{options.teachers.filter(t => !detail.advisors.some(a => a.userId === t.id)).map(t => <label key={t.id} className="student-option"><input type="checkbox" checked={advisorAddIds.includes(t.id)} onChange={(e) => setAdvisorAddIds(e.target.checked ? [...advisorAddIds, t.id] : advisorAddIds.filter(id => id !== t.id))} /><span className="student-avatar">{t.name.slice(0,1)}</span><span><b>{t.name}</b></span><span className="check-box"><Check size={14} /></span></label>)}</div></div>}{advisorError && <div className="form-error" role="alert">{advisorError}</div>}<div className="modal-actions"><button type="button" className="button button-secondary" disabled={advisorBusy} onClick={() => setShowAdvisorModal(false)}>İptal</button><button type="button" className="button button-primary" disabled={advisorBusy} onClick={() => void saveAdvisors()}>{advisorBusy ? 'Kaydediliyor…' : 'Kaydet'}</button></div></div></div>}</>
 }
 
-function ProjectCreate({ onCreated }: { onCreated: (projectId: string, warning?: string) => void }) { const [years, setYears] = useState<AcademicYear[]>([]); const [options, setOptions] = useState<ProjectOptions | null>(null); const [students, setStudents] = useState<Student[]>([]); const [studentsTotal, setStudentsTotal] = useState(0); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(''); const [selected, setSelected] = useState<string[]>([]); const [error, setError] = useState(''); const [form, setForm] = useState({ title: '', description: '', academicYearId: '', categoryId: '', statusId: '', participationType: 'INDIVIDUAL' as 'INDIVIDUAL' | 'TEAM', teamName: '' });
+function ProjectCreate({ user, onCreated }: { user: UserProfile; onCreated: (projectId: string, warning?: string) => void }) { const [years, setYears] = useState<AcademicYear[]>([]); const [options, setOptions] = useState<ProjectOptions | null>(null); const [students, setStudents] = useState<Student[]>([]); const [studentsTotal, setStudentsTotal] = useState(0); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(''); const [selected, setSelected] = useState<string[]>([]); const [selectedAdvisors, setSelectedAdvisors] = useState<string[]>([]); const [error, setError] = useState(''); const [form, setForm] = useState({ title: '', description: '', academicYearId: '', categoryId: '', statusId: '', participationType: 'INDIVIDUAL' as 'INDIVIDUAL' | 'TEAM', teamName: '' });
   useEffect(() => { Promise.all([apiRequest<AcademicYear[]>('/api/academic-years'), apiRequest<ProjectOptions>('/api/project-options')]).then(([y, o]) => { setYears(y); setOptions(o); const active = y.find((a) => a.isCurrent) ?? y[0]; setForm((f) => ({ ...f, academicYearId: active?.id ?? '', categoryId: o.categories[0]?.id ?? '', statusId: o.statuses[0]?.id ?? '' })) }).catch((e) => setError(e instanceof Error ? e.message : 'Form bilgileri alınamadı.')).finally(() => setLoading(false)) }, [])
   useEffect(() => { const q = new URLSearchParams({ page: '1', pageSize: '100' }); if (form.academicYearId) q.set('academicYearId', form.academicYearId); if (search.trim()) q.set('search', search.trim()); fetch('/api/students?' + q, { credentials: 'include' }).then(async (r) => { const j = await r.json(); if (r.ok && j.success) { setStudents(j.data); setStudentsTotal(j.pagination.total) } }).catch(() => {}) }, [form.academicYearId, search])
   const schema = z.object({ title: z.string().trim().min(1, 'Proje başlığı zorunludur.').max(200), description: z.string().max(10000), academicYearId: z.string().min(1, 'Akademik yıl seçin.'), categoryId: z.string().min(1, 'Proje kategorisi seçin.'), statusId: z.string().min(1, 'Proje durumu seçin.'), participationType: z.enum(['INDIVIDUAL', 'TEAM']), teamName: z.string(), enrollmentIds: z.array(z.string()).min(1, 'En az bir öğrenci seçin.') })
-  async function submit(event: FormEvent) { event.preventDefault(); setError(''); const parsed = schema.safeParse({ ...form, enrollmentIds: selected }); if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Form bilgilerini kontrol edin.'); return }; if (form.participationType === 'INDIVIDUAL' && selected.length !== 1) { setError('Bireysel projede yalnızca bir öğrenci seçin.'); return }; if (form.participationType === 'TEAM' && selected.length < 2) { setError('Takım projesi için en az iki öğrenci seçin.'); return }; if (form.participationType === 'TEAM' && !form.teamName.trim()) { setError('Takım çalışması için takım adı girin.'); return } setBusy(true); try { const result = await apiRequest<{ projectId: string; conflicts: Array<{ enrollmentId: string; message: string }> }>('/api/projects', { method: 'POST', body: JSON.stringify({ ...form, title: form.title.trim(), description: form.description.trim() || null, teamName: form.participationType === 'TEAM' ? form.teamName.trim() : null, enrollmentIds: selected }) }); onCreated(result.projectId, result.conflicts.length ? `${result.conflicts.length} öğrenci için mükerrerlik uyarısı var.` : undefined) } catch (e) { setError(e instanceof Error ? e.message : 'Proje kaydedilemedi.') } finally { setBusy(false) } }
+  async function submit(event: FormEvent) { event.preventDefault(); setError(''); const parsed = schema.safeParse({ ...form, enrollmentIds: selected }); if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Form bilgilerini kontrol edin.'); return }; if (form.participationType === 'INDIVIDUAL' && selected.length !== 1) { setError('Bireysel projede yalnızca bir öğrenci seçin.'); return }; if (form.participationType === 'TEAM' && selected.length < 2) { setError('Takım projesi için en az iki öğrenci seçin.'); return }; if (form.participationType === 'TEAM' && !form.teamName.trim()) { setError('Takım çalışması için takım adı girin.'); return } setBusy(true); try { const body: Record<string, unknown> = { ...form, title: form.title.trim(), description: form.description.trim() || null, teamName: form.participationType === 'TEAM' ? form.teamName.trim() : null, enrollmentIds: selected }; if (user.role === 'ADMIN') { body.advisorUserIds = selectedAdvisors }; const result = await apiRequest<{ projectId: string; conflicts: Array<{ enrollmentId: string; message: string }> }>('/api/projects', { method: 'POST', body: JSON.stringify(body) }); onCreated(result.projectId, result.conflicts.length ? `${result.conflicts.length} öğrenci için mükerrerlik uyarısı var.` : undefined) } catch (e) { setError(e instanceof Error ? e.message : 'Proje kaydedilemedi.') } finally { setBusy(false) } }
   if (loading) return <><PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Öğrenci çalışması için yeni proje kaydı hazırlayın." /><LoadingState /></>
-  return <><PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Öğrenci çalışması için yeni proje kaydı hazırlayın." /><form className="create-project-layout" onSubmit={submit}><div className="form-column"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Proje bilgileri</h3><p>Çalışmanın temel bilgilerini girin.</p></div></div><label className="field-label">Proje başlığı <span className="required">*</span><input className="text-input" maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Örn. Doğal yaşamı gözlemliyoruz" /></label><label className="field-label">Proje açıklaması<textarea className="text-input" rows={4} maxLength={10000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Projenin amacı ve kısa içeriği" /></label><div className="form-two-col"><label className="field-label">Akademik yıl <span className="required">*</span><select className="text-input" value={form.academicYearId} onChange={(e) => setForm({ ...form, academicYearId: e.target.value })}><option value="">Seçin</option>{years.map((y) => <option key={y.id} value={y.id}>{y.name}{y.isCurrent ? ' · Güncel' : ''}</option>)}</select></label><label className="field-label">Proje kategorisi <span className="required">*</span><select className="text-input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Seçin</option>{options?.categories.map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}</select></label></div><div className="form-two-col"><label className="field-label">Proje durumu<select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>{options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label className="field-label">Katılım türü<select className="text-input" value={form.participationType} onChange={(e) => setForm({ ...form, participationType: e.target.value as 'INDIVIDUAL' | 'TEAM' })}><option value="INDIVIDUAL">Bireysel</option><option value="TEAM">Takım</option></select></label></div>{form.participationType === 'TEAM' && <label className="field-label">Takım adı <span className="required">*</span><input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} placeholder="Takım adı" /></label>}</section><section className="panel form-panel"><div className="form-section-title"><span>02</span><div><h3>Öğrencileri seçin</h3><p>Projeye en az bir öğrenci ekleyin. {selected.length} öğrenci seçildi.</p></div></div><div className="search-wrap student-picker-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Öğrenci ara" /></div>{students.length ? <div className="student-picker">{students.map((s) => <label className="student-option" key={s.enrollmentId}><input type="checkbox" checked={selected.includes(s.enrollmentId)} onChange={(e) => setSelected(e.target.checked ? [...selected, s.enrollmentId] : selected.filter((id) => id !== s.enrollmentId))} /><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><span><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></span><span className="check-box"><Check size={14} /></span></label>)}</div> : <div className="mini-empty">{studentsTotal ? 'Bu aramayla eşleşen öğrenci bulunamadı.' : 'Seçilen akademik yılda öğrenci kaydı yok. Önce Excel aktarımıyla öğrenci ekleyin.'}</div>}</section></div><aside className="form-aside"><div className="panel submit-panel"><div className="submit-badge"><Sparkles size={20} /></div><h3>Projeyi kaydetmeye hazır mısınız?</h3><p>Proje ve öğrenci ilişkileri seçtiğiniz akademik yıl altında kaydedilir.</p>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary full-button" disabled={busy || loading}>{busy ? 'Kaydediliyor…' : 'Projeyi oluştur'} <ChevronRight size={16} /></button><span className="secure-note"><Shield size={14} /> Kayıt, kurum API’si üzerinden doğrulanır.</span></div><div className="info-note"><b><Activity size={16} /> Kayıt bilgisi</b><p>Başlık, açıklama, akademik yıl, kategori, durum ve öğrenciler proje kaydına eklenir.</p></div></aside></form></>
+  return <><PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Öğrenci çalışması için yeni proje kaydı hazırlayın." /><form className="create-project-layout" onSubmit={submit}><div className="form-column"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Proje bilgileri</h3><p>Çalışmanın temel bilgilerini girin.</p></div></div><label className="field-label">Proje başlığı <span className="required">*</span><input className="text-input" maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Örn. Doğal yaşamı gözlemliyoruz" /></label><label className="field-label">Proje açıklaması<textarea className="text-input" rows={4} maxLength={10000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Projenin amacı ve kısa içeriği" /></label><div className="form-two-col"><label className="field-label">Akademik yıl <span className="required">*</span><select className="text-input" value={form.academicYearId} onChange={(e) => setForm({ ...form, academicYearId: e.target.value })}><option value="">Seçin</option>{years.map((y) => <option key={y.id} value={y.id}>{y.name}{y.isCurrent ? ' · Güncel' : ''}</option>)}</select></label><label className="field-label">Proje kategorisi <span className="required">*</span><select className="text-input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Seçin</option>{options?.categories.map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}</select></label></div><div className="form-two-col"><label className="field-label">Proje durumu<select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>{options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label className="field-label">Katılım türü<select className="text-input" value={form.participationType} onChange={(e) => setForm({ ...form, participationType: e.target.value as 'INDIVIDUAL' | 'TEAM' })}><option value="INDIVIDUAL">Bireysel</option><option value="TEAM">Takım</option></select></label></div>{form.participationType === 'TEAM' && <label className="field-label">Takım adı <span className="required">*</span><input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} placeholder="Takım adı" /></label>}{user.role === 'ADMIN' && options?.teachers && options.teachers.length > 0 && <div className="form-two-col"><label className="field-label" style={{ gridColumn: '1 / -1' }}>Danışman öğretmenler (Yönetici seçimi)<small style={{ display: 'block', color: '#64748b', marginTop: '2px', fontWeight: 'normal' }}>Danışman seçmezseniz öğrencilerin ilgili akademik yıl danışmanları otomatik atanır. Danışmanı olmayan öğrenciler için projeyi oluşturan kişi varsayılan danışman olarak eklenir.</small><div className="student-picker" style={{ maxHeight: '160px', marginTop: '6px' }}>{options.teachers.map((t) => <label className="student-option" key={t.id}><input type="checkbox" checked={selectedAdvisors.includes(t.id)} onChange={(e) => setSelectedAdvisors(e.target.checked ? [...selectedAdvisors, t.id] : selectedAdvisors.filter((id) => id !== t.id))} /><span className="student-avatar">{t.name.slice(0, 1)}</span><span><b>{t.name}</b></span><span className="check-box"><Check size={14} /></span></label>)}</div></label></div>}</section><section className="panel form-panel"><div className="form-section-title"><span>02</span><div><h3>Öğrencileri seçin</h3><p>Projeye en az bir öğrenci ekleyin. {selected.length} öğrenci seçildi.</p></div></div><div className="search-wrap student-picker-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Öğrenci ara" /></div>{students.length ? <div className="student-picker">{students.map((s) => <label className="student-option" key={s.enrollmentId}><input type="checkbox" checked={selected.includes(s.enrollmentId)} onChange={(e) => setSelected(e.target.checked ? [...selected, s.enrollmentId] : selected.filter((id) => id !== s.enrollmentId))} /><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><span><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></span><span className="check-box"><Check size={14} /></span></label>)}</div> : <div className="mini-empty">{studentsTotal ? 'Bu aramayla eşleşen öğrenci bulunamadı.' : 'Seçilen akademik yılda öğrenci kaydı yok. Önce Excel aktarımıyla öğrenci ekleyin.'}</div>}</section></div><aside className="form-aside"><div className="panel submit-panel"><div className="submit-badge"><Sparkles size={20} /></div><h3>Projeyi kaydetmeye hazır mısınız?</h3><p>Proje ve öğrenci ilişkileri seçtiğiniz akademik yıl altında kaydedilir.</p>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary full-button" disabled={busy || loading}>{busy ? 'Kaydediliyor…' : 'Projeyi oluştur'} <ChevronRight size={16} /></button><span className="secure-note"><Shield size={14} /> Kayıt, kurum API’si üzerinden doğrulanır.</span></div><div className="info-note"><b><Activity size={16} /> Kayıt bilgisi</b><p>Başlık, açıklama, akademik yıl, kategori, durum ve öğrenciler proje kaydına eklenir.</p></div></aside></form></>
 }
 
 type ImportPreviewRow = { rowNumber: number; bilsemNo: string | null; firstName?: string; lastName?: string; resultTypes: string[]; message?: string; matchedAdvisorUserId?: string | null; resolutionRequired?: boolean; rowId?: string }
@@ -329,15 +549,385 @@ function ExcelImport({ notify, refresh }: { notify: (message: string, type?: Toa
   return <><PageHeading eyebrow="ÖĞRENCİ YÖNETİMİ" title="Excel Aktarımı" description="Öğrenci listesini önizleyin, öğretmenleri eşleştirin ve aktarımı onaylayın." /><div className="import-layout"><div className="import-main"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Dosyanızı seçin</h3><p>Yalnızca .xlsx biçimi kabul edilir.</p></div></div><label className="field-label">Akademik yıl<select className="text-input" value={yearId} onChange={(e) => setYearId(e.target.value)}>{years.map((y) => <option value={y.id} key={y.id}>{y.name}</option>)}</select></label><label className="upload-zone"><Upload size={24} /><b>{file?.name ?? 'Excel dosyanızı buraya bırakın veya seçin'}</b><span>{file ? `${(file.size / 1024).toFixed(0)} KB · Seçildi` : 'XLSX · En fazla 4 MB'}</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary" disabled={busy || !file || !yearId} onClick={() => void preview()}>{busy ? 'İşleniyor…' : 'Dosyayı önizle'} <ChevronRight size={16} /></button></section>{batch && <section className="panel form-panel import-results"><div className="panel-heading"><div><h3>Önizleme sonucu</h3><p>Satırları kontrol edip zorunlu eşleştirmeleri tamamlayın.</p></div><span className="badge badge-blue">{batch.totalRows} kaynak satırı</span></div><div className="import-stat-row"><span><b>{batch.validRows}</b> Geçerli</span><span><b>{batch.invalidRows}</b> Kontrol gerekli</span><span><b>{batch.newStudentCount}</b> Yeni</span><span><b>{batch.continuingStudentCount}</b> Devam</span></div>{batch.results.filter((r) => r.rowNumber > 0).length ? <div className="table-wrap"><table><thead><tr><th>SATIR</th><th>BİLSEM NO</th><th>ÖĞRENCİ</th><th>SONUÇ / EŞLEŞTİRME</th></tr></thead><tbody>{batch.results.filter((r) => r.rowNumber > 0).map((r) => <tr key={r.rowNumber}><td>{r.rowNumber}</td><td className="mono">{r.bilsemNo ?? '—'}</td><td>{personName(r.firstName ?? '', r.lastName ?? '')}</td><td><span className={`badge ${r.resultTypes.includes('INVALID_RECORD') || r.resultTypes.includes('UNMATCHED_TEACHER') || r.resultTypes.includes('DUPLICATE_BILSEM_NO') ? 'badge-amber' : 'badge-green'}`}>{r.resultTypes.join(', ')}</span>{r.message && <small className="row-message">{r.message}</small>}{r.resolutionRequired && <div className="advisor-resolution"><select className="text-input" aria-label={`${r.firstName ?? ''} ${r.lastName ?? ''} danışman öğretmeni`} defaultValue=""><option value="">Etkin öğretmen seçin</option>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name} · {teacher.email}</option>)}</select><button className="button button-secondary button-small" disabled={busy || !r.rowId} onClick={(event) => { const select = event.currentTarget.parentElement?.querySelector('select'); if (select) void resolveTeacher(r, select.value) }}>Eşleştir</button>{teachers.length === 0 && <small className="row-message">Etkin öğretmen hesabı bulunamadı. Önce öğretmen hesabı oluşturun.</small>}</div>}</td></tr>)}</tbody></table></div> : <EmptyState title="Aktarılabilir satır yok" message="Seçilen dosyada öğrenci satırı bulunamadı." />}<div className="import-actions"><button className="button button-secondary" disabled={busy} onClick={() => void cancel()}>Aktarımı iptal et</button><button className="button button-primary" disabled={busy || batch.validRows === 0 || batch.invalidRows > 0} onClick={() => void commit()}>{busy ? 'Onaylanıyor…' : 'Geçerli satırları aktar'} <Check size={16} /></button></div>{batch.invalidRows > 0 && <p className="inline-hint">{batch.invalidRows} satır kontrol bekliyor. Zorunlu öğretmen eşleştirmeleri ve diğer hatalar tamamlanmadan aktarım onaylanamaz.</p>}</section>}</div><aside className="import-aside"><div className="panel info-note"><b><FileSpreadsheet size={17} /> Excel şablon alanları</b><p>BİLSEM No, Ad, Soyad, Okul, Sınıf, Şube, Yetenek Alanı ve Danışman Öğretmen.</p><p>BİLSEM numarası rakamlardan oluşmalı. Güvenilir tam sayılar ve açık sıfır dolgulu biçimler kabul edilir; belirsiz hücreler önizlemede reddedilir.</p></div><div className="panel info-note"><b><Shield size={16} /> Güvenli aktarım</b><p>Dosya önce sunucuda ayrıştırılıp mevcut kayıtlarla karşılaştırılır. Öğrenciler yalnızca onayınızdan sonra kaydedilir.</p></div></aside></div></>
 }
 
+type TeacherFilter = 'ALL' | 'ACTIVE' | 'PASSIVE'
+
 function UsersAdmin({ refreshKey, notify, user }: { refreshKey: number; notify: (message: string, type?: Toast['type']) => void; user: UserProfile }) {
-  const [items, setItems] = useState<UserProfile[]>([]); const [search, setSearch] = useState(''); const [error, setError] = useState<unknown>(null); const [loading, setLoading] = useState(true); const [createOpen, setCreateOpen] = useState(false); const [createBusy, setCreateBusy] = useState(false); const [createError, setCreateError] = useState(''); const [teacherForm, setTeacherForm] = useState({ name: '', email: '' }); const [oneTimeCredential, setOneTimeCredential] = useState<{ name: string; email: string; password: string } | null>(null)
-  const load = useCallback(() => { setLoading(true); apiRequest<UserProfile[]>(`/api/admin/users?page=1&pageSize=100${search.trim() ? `&search=${encodeURIComponent(search.trim())}` : ''}`).then(setItems).catch(setError).finally(() => setLoading(false)) }, [search])
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load, refreshKey])
-  async function update(id: string, body: { role?: Role; isActive?: boolean }) { try { await apiRequest(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }); notify('Kullanıcı güncellendi.'); load() } catch (e) { notify(e instanceof Error ? e.message : 'Kullanıcı güncellenemedi.', 'error') } }
-  async function createTeacher(e: FormEvent) { e.preventDefault(); setCreateBusy(true); setCreateError(''); setOneTimeCredential(null); try { const result = await apiRequest<{ user: { name: string; email: string }; temporaryPassword: string }>('/api/admin/teachers', { method: 'POST', body: JSON.stringify(teacherForm) }); setOneTimeCredential({ ...result.user, password: result.temporaryPassword }); setTeacherForm({ name: '', email: '' }); setCreateOpen(false); notify('Öğretmen hesabı oluşturuldu. Geçici parola bu ekranda yalnızca bir kez gösterilir.'); load() } catch (e) { setCreateError(e instanceof Error ? e.message : 'Öğretmen hesabı oluşturulamadı.') } finally { setCreateBusy(false) } }
-  async function copyTemporaryPassword() { if (!oneTimeCredential) return; try { await navigator.clipboard.writeText(oneTimeCredential.password); notify('Geçici parola panoya kopyalandı.') } catch { notify('Kopyalama başarısız. Parolayı güvenli biçimde not edin.', 'error') } }
-  return <><PageHeading eyebrow="KURUM AYARLARI" title="Kullanıcı Yönetimi" description="Hesap durumunu görüntüleyin; öğretmen hesapları oluşturun, rol ve erişimi yönetin." action={<div className="heading-count"><b>{items.length}</b><span>hesap</span></div>} />{oneTimeCredential && <section className="panel temporary-credential"><div><b>{oneTimeCredential.name} için geçici parola</b><p>{oneTimeCredential.email} · Bu parola yalnızca bu kez gösteriliyor. Öğretmen ilk girişte değiştirmeli.</p><code>{oneTimeCredential.password}</code></div><div className="temporary-actions"><button className="button button-secondary" onClick={() => void copyTemporaryPassword()}>Parolayı kopyala</button><button className="button button-primary" onClick={() => setOneTimeCredential(null)}>Güvenli biçimde aldım</button></div></section>}<section className="panel students-filter-panel"><label className="student-filter-search"><Search size={16}/><input aria-label="Kullanıcı ara" placeholder="Ad veya e-posta ile ara" value={search} onChange={(e) => setSearch(e.target.value)} /></label><button className="button button-primary" onClick={() => { setCreateOpen((v) => !v); setCreateError('') }}>{createOpen ? 'Formu kapat' : 'Öğretmen Ekle'}</button></section>{createOpen && <form className="panel teacher-create-form" onSubmit={(e) => void createTeacher(e)}><h3>Yeni öğretmen hesabı</h3><p>Sunucu güvenli bir geçici parola üretir. Hesap ilk girişte parola değişikliğini zorunlu kılar.</p><div className="form-two-col"><label className="field-label">Ad soyad<input className="text-input" required minLength={2} maxLength={200} value={teacherForm.name} onChange={(e) => setTeacherForm({ ...teacherForm, name: e.target.value })} /></label><label className="field-label">E-posta adresi<input className="text-input" type="email" required value={teacherForm.email} onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })} /></label></div>{createError && <div className="form-error" role="alert">{createError}</div>}<button className="button button-primary" disabled={createBusy}>{createBusy ? 'Hesap oluşturuluyor…' : 'Öğretmen hesabı oluştur'}</button></form>}<div className="user-reset-note user-reset-wide">E-posta sıfırlama bağlantısı etkin değil. Kurulumda e-posta sağlayıcısı yok ve Better Auth’un varsayılan token saklaması açık token kimliği içeriyor. Mevcut öğretmen parolası yönetici tarafından değiştirilemez.</div>{error ? <ErrorState error={error} retry={load} /> : loading ? <LoadingState /> : items.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>KULLANICI</th><th>ROL</th><th>HESAP DURUMU</th><th>KAYIT TARİHİ</th><th>İŞLEMLER</th></tr></thead><tbody>{items.map((u) => <tr key={u.id}><td><div className="student-cell"><div className="student-avatar">{u.name.slice(0, 1)}</div><span><b>{u.name}</b><small>{u.email}</small></span></div></td><td><select className="table-select" value={u.role} onChange={(e) => void update(u.id, { role: e.target.value as Role })}><option value="TEACHER">Öğretmen</option><option value="ADMIN">Yönetici</option></select></td><td><span className={`badge ${u.isActive ? 'badge-green' : 'badge-amber'}`}>{u.isActive ? 'Etkin' : 'Pasif'}</span>{u.mustChangePassword && <small className="user-password-state">İlk parola değişikliği bekleniyor</small>}</td><td>{dateLabel(u.createdAt)}</td><td><button className={`button ${u.isActive ? 'button-secondary' : 'button-primary'} button-small`} disabled={u.id === user.id && u.isActive} onClick={() => void update(u.id, { isActive: !u.isActive })}>{u.id === user.id ? 'Kendi hesabınız' : u.isActive ? 'Erişimi kapat' : 'Etkinleştir'}</button></td></tr>)}</tbody></table></div></div> : <div className="panel"><EmptyState title="Kullanıcı bulunamadı" message="Aramanızı değiştirin veya öğretmen hesabı oluşturun." /></div>}</>
+  const [items, setItems] = useState<UserProfile[]>([])
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<TeacherFilter>('ALL')
+  const [error, setError] = useState<unknown>(null)
+  const [loading, setLoading] = useState(true)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const [teacherForm, setTeacherForm] = useState({ name: '', email: '' })
+  const [oneTimeCredential, setOneTimeCredential] = useState<{ name: string; email: string; password: string } | null>(null)
+
+  const [resetTarget, setResetTarget] = useState<UserProfile | null>(null)
+  const [resetMode, setResetMode] = useState<'auto' | 'custom'>('auto')
+  const [customPassword, setCustomPassword] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetError, setResetError] = useState('')
+
+  const load = useCallback(() => {
+    setLoading(true)
+    apiRequest<UserProfile[]>(`/api/admin/users?page=1&pageSize=100${search.trim() ? `&search=${encodeURIComponent(search.trim())}` : ''}`)
+      .then(setItems)
+      .catch(setError)
+      .finally(() => setLoading(false))
+  }, [search])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timer)
+  }, [load, refreshKey])
+
+  async function update(id: string, body: { role?: Role; isActive?: boolean }) {
+    try {
+      await apiRequest(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+      notify('Kullanıcı güncellendi.')
+      load()
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Kullanıcı güncellenemedi.', 'error')
+    }
+  }
+
+  async function createTeacher(e: FormEvent) {
+    e.preventDefault()
+    setCreateBusy(true)
+    setCreateError('')
+    setOneTimeCredential(null)
+    try {
+      const result = await apiRequest<{ user: { name: string; email: string }; temporaryPassword: string }>('/api/admin/teachers', {
+        method: 'POST',
+        body: JSON.stringify(teacherForm)
+      })
+      setOneTimeCredential({ ...result.user, password: result.temporaryPassword })
+      setTeacherForm({ name: '', email: '' })
+      setCreateOpen(false)
+      notify('Öğretmen hesabı oluşturuldu. Geçici parola bu ekranda yalnızca bir kez gösterilir.')
+      load()
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : 'Öğretmen hesabı oluşturulamadı.')
+    } finally {
+      setCreateBusy(false)
+    }
+  }
+
+  async function confirmResetPassword(e: FormEvent) {
+    e.preventDefault()
+    if (!resetTarget) return
+    if (resetMode === 'custom' && customPassword.length < 8) {
+      setResetError('Parola en az 8 karakter olmalıdır.')
+      return
+    }
+    setResetBusy(true)
+    setResetError('')
+    try {
+      const body = resetMode === 'custom' ? { customPassword } : {}
+      const res = await apiRequest<{ temporaryPassword: string; mustChangePassword: boolean }>(`/api/admin/users/${resetTarget.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      setOneTimeCredential({
+        name: resetTarget.name,
+        email: resetTarget.email,
+        password: res.temporaryPassword,
+      })
+      notify(`'${resetTarget.name}' için geçici parola oluşturuldu.`)
+      setResetTarget(null)
+      setCustomPassword('')
+      setResetMode('auto')
+      load()
+    } catch (e) {
+      setResetError(e instanceof Error ? e.message : 'Parola sıfırlanamadı.')
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
+  async function copyTemporaryPassword() {
+    if (!oneTimeCredential) return
+    try {
+      await navigator.clipboard.writeText(oneTimeCredential.password)
+      notify('Geçici parola panoya kopyalandı.')
+    } catch {
+      notify('Kopyalama başarısız. Parolayı güvenli biçimde not edin.', 'error')
+    }
+  }
+
+  const filteredItems = items.filter((u) => {
+    if (statusFilter === 'ACTIVE') return u.isActive
+    if (statusFilter === 'PASSIVE') return !u.isActive
+    return true
+  })
+
+  const counts = {
+    all: items.length,
+    active: items.filter((u) => u.isActive).length,
+    passive: items.filter((u) => !u.isActive).length,
+  }
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="KURUM AYARLARI"
+        title="Kullanıcı Yönetimi"
+        description="Hesap durumunu görüntüleyin; öğretmen hesapları oluşturun, parola sıfırlayın ve durumlarını yönetin."
+        action={<div className="heading-count"><b>{items.length}</b><span>hesap</span></div>}
+      />
+
+      {oneTimeCredential && (
+        <section className="panel temporary-credential">
+          <div>
+            <b>{oneTimeCredential.name} için geçici parola</b>
+            <p>{oneTimeCredential.email} · Bu parola yalnızca bu kez gösteriliyor. Öğretmen ilk girişte değiştirmeli.</p>
+            <code>{oneTimeCredential.password}</code>
+          </div>
+          <div className="temporary-actions">
+            <button className="button button-secondary" onClick={() => void copyTemporaryPassword()}>Parolayı kopyala</button>
+            <button className="button button-primary" onClick={() => setOneTimeCredential(null)}>Güvenli biçimde aldım</button>
+          </div>
+        </section>
+      )}
+
+      <div className="report-tabs" style={{ marginBottom: 12 }}>
+        <button
+          type="button"
+          className={`report-tab ${statusFilter === 'ALL' ? 'report-tab-active' : ''}`}
+          onClick={() => setStatusFilter('ALL')}
+        >
+          Tümü ({counts.all})
+        </button>
+        <button
+          type="button"
+          className={`report-tab ${statusFilter === 'ACTIVE' ? 'report-tab-active' : ''}`}
+          onClick={() => setStatusFilter('ACTIVE')}
+        >
+          Aktif Öğretmenler ({counts.active})
+        </button>
+        <button
+          type="button"
+          className={`report-tab ${statusFilter === 'PASSIVE' ? 'report-tab-active' : ''}`}
+          onClick={() => setStatusFilter('PASSIVE')}
+        >
+          Pasif Öğretmenler ({counts.passive})
+        </button>
+      </div>
+
+      <section className="panel students-filter-panel">
+        <label className="student-filter-search">
+          <Search size={16} />
+          <input
+            aria-label="Kullanıcı ara"
+            placeholder="Ad veya e-posta ile ara"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </label>
+        <button className="button button-primary" onClick={() => { setCreateOpen((v) => !v); setCreateError('') }}>
+          {createOpen ? 'Formu kapat' : 'Öğretmen Ekle'}
+        </button>
+      </section>
+
+      {createOpen && (
+        <form className="panel teacher-create-form" onSubmit={(e) => void createTeacher(e)}>
+          <h3>Yeni öğretmen hesabı</h3>
+          <p>Sunucu güvenli bir geçici parola üretir. Hesap ilk girişte parola değişikliğini zorunlu kılar.</p>
+          <div className="form-two-col">
+            <label className="field-label">
+              Ad soyad
+              <input
+                className="text-input"
+                required
+                minLength={2}
+                maxLength={200}
+                value={teacherForm.name}
+                onChange={(e) => setTeacherForm({ ...teacherForm, name: e.target.value })}
+              />
+            </label>
+            <label className="field-label">
+              E-posta adresi
+              <input
+                className="text-input"
+                type="email"
+                required
+                value={teacherForm.email}
+                onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })}
+              />
+            </label>
+          </div>
+          {createError && <div className="form-error" role="alert">{createError}</div>}
+          <button className="button button-primary" disabled={createBusy}>
+            {createBusy ? 'Hesap oluşturuluyor…' : 'Öğretmen hesabı oluştur'}
+          </button>
+        </form>
+      )}
+
+      {error ? (
+        <ErrorState error={error} retry={load} />
+      ) : loading ? (
+        <LoadingState />
+      ) : filteredItems.length ? (
+        <div className="panel table-panel">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>KULLANICI</th>
+                  <th>ROL</th>
+                  <th>HESAP DURUMU</th>
+                  <th>KAYIT TARİHİ</th>
+                  <th>İŞLEMLER</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredItems.map((u) => {
+                  const isSelf = u.id === user.id
+                  const canResetPassword = u.role === 'TEACHER' && u.isActive && !isSelf
+
+                  return (
+                    <tr key={u.id}>
+                      <td>
+                        <div className="student-cell">
+                          <div className="student-avatar">{u.name.slice(0, 1)}</div>
+                          <span>
+                            <b>{u.name}</b>
+                            <small>{u.email}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <select
+                          className="table-select"
+                          value={u.role}
+                          onChange={(e) => void update(u.id, { role: e.target.value as Role })}
+                        >
+                          <option value="TEACHER">Öğretmen</option>
+                          <option value="ADMIN">Yönetici</option>
+                        </select>
+                      </td>
+                      <td>
+                        <span className={`badge ${u.isActive ? 'badge-green' : 'badge-amber'}`}>
+                          {u.isActive ? 'Aktif' : 'Pasif'}
+                        </span>
+                        {u.mustChangePassword && (
+                          <small className="user-password-state">İlk parola değişikliği bekleniyor</small>
+                        )}
+                      </td>
+                      <td>{dateLabel(u.createdAt)}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            className={`button ${u.isActive ? 'button-secondary' : 'button-primary'} button-small`}
+                            disabled={isSelf && u.isActive}
+                            onClick={() => void update(u.id, { isActive: !u.isActive })}
+                          >
+                            {isSelf ? 'Kendi hesabınız' : u.isActive ? 'Pasife Al' : 'Aktifleştir'}
+                          </button>
+
+                          {canResetPassword && (
+                            <button
+                              className="button button-secondary button-small"
+                              onClick={() => {
+                                setResetTarget(u)
+                                setResetMode('auto')
+                                setCustomPassword('')
+                                setResetError('')
+                              }}
+                            >
+                              Şifre Sıfırla
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="panel">
+          <EmptyState title="Kullanıcı bulunamadı" message="Aramanızı veya filtreyi değiştirin." />
+        </div>
+      )}
+
+      {resetTarget && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <h3>Öğretmen Parolasını Sıfırla</h3>
+            <p>
+              <b>{resetTarget.name}</b> ({resetTarget.email}) için yeni bir geçici parola tanımlayın.
+            </p>
+            <form onSubmit={(e) => void confirmResetPassword(e)} style={{ display: 'grid', gap: '12px', marginTop: '10px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="resetMode"
+                  checked={resetMode === 'auto'}
+                  onChange={() => setResetMode('auto')}
+                />
+                <span>Güvenli geçici parola sistem tarafından oluşturulsun</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="resetMode"
+                  checked={resetMode === 'custom'}
+                  onChange={() => setResetMode('custom')}
+                />
+                <span>Geçici parolayı kendim belirlemek istiyorum</span>
+              </label>
+
+              {resetMode === 'custom' && (
+                <label className="field-label" style={{ marginTop: '4px' }}>
+                  Yeni Geçici Parola (en az 8 karakter)
+                  <input
+                    className="text-input"
+                    type="password"
+                    required
+                    minLength={8}
+                    value={customPassword}
+                    onChange={(e) => setCustomPassword(e.target.value)}
+                    placeholder="En az 8 karakterli parola"
+                  />
+                </label>
+              )}
+
+              <p className="modal-warning" style={{ margin: '4px 0 0' }}>
+                Eski oturumlar sonlandırılacak ve öğretmen sisteme ilk girişinde yeni bir parola belirlemek zorunda olacaktır.
+              </p>
+
+              {resetError && <div className="form-error" role="alert">{resetError}</div>}
+
+              <div className="modal-actions" style={{ marginTop: '12px' }}>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={resetBusy}
+                  onClick={() => setResetTarget(null)}
+                >
+                  İptal
+                </button>
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={resetBusy}
+                >
+                  {resetBusy ? 'Sıfırlanıyor…' : 'Parolayı Sıfırla'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
+
+
 function AcademicYears({ refreshKey, notify }: { refreshKey: number; notify: (message: string, type?: Toast['type']) => void }) { const [items, setItems] = useState<AcademicYear[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [form, setForm] = useState({ name: '', startsOn: '', endsOn: '', isCurrent: false }); const load = useCallback(() => { apiRequest<AcademicYear[]>('/api/academic-years').then(setItems).catch((e) => setError(e.message)) }, []); useEffect(() => { const timer = window.setTimeout(() => load(), 0); return () => window.clearTimeout(timer) }, [load, refreshKey]); async function submit(e: FormEvent) { e.preventDefault(); const parsed = z.object({ name: z.string().trim().min(1, 'Yıl adı zorunlu.'), startsOn: z.iso.date(), endsOn: z.iso.date() }).safeParse(form); if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Bilgileri kontrol edin.'); return }; setBusy(true); setError(''); try { await apiRequest('/api/academic-years', { method: 'POST', body: JSON.stringify(form) }); setForm({ name: '', startsOn: '', endsOn: '', isCurrent: false }); notify('Akademik yıl oluşturuldu.'); load() } catch (e) { setError(e instanceof Error ? e.message : 'Akademik yıl eklenemedi.') } finally { setBusy(false) } } return <><PageHeading eyebrow="KURUM AYARLARI" title="Akademik Yıllar" description="Öğrenci ve proje kayıtlarının bağlandığı akademik dönemleri yönetin." /><div className="year-layout"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Yeni akademik yıl</h3><p>Başlangıç ve bitiş tarihlerini girin.</p></div></div><form onSubmit={(e) => void submit(e)}><label className="field-label">Akademik yıl adı<input className="text-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="2026–2027" /></label><div className="form-two-col"><label className="field-label">Başlangıç tarihi<input className="text-input" type="date" value={form.startsOn} onChange={(e) => setForm({ ...form, startsOn: e.target.value })} /></label><label className="field-label">Bitiş tarihi<input className="text-input" type="date" value={form.endsOn} onChange={(e) => setForm({ ...form, endsOn: e.target.value })} /></label></div><label className="checkbox-line"><input type="checkbox" checked={form.isCurrent} onChange={(e) => setForm({ ...form, isCurrent: e.target.checked })} /> Bu yılı güncel akademik yıl yap</label>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary" disabled={busy}>{busy ? 'Kaydediliyor…' : 'Akademik yılı ekle'} <Plus size={16} /></button></form></section><section className="panel"><div className="panel-heading"><div><h3>Tanımlı yıllar</h3><p>{items.length} akademik dönem</p></div></div>{items.length ? <div className="year-list">{items.map((y) => <div className="year-row" key={y.id}><span className="year-icon"><CalendarDays size={18} /></span><span><b>{y.name}</b><small>{dateLabel(y.startsOn)} — {dateLabel(y.endsOn)}</small></span>{y.isCurrent && <span className="badge badge-green">Güncel</span>}</div>)}</div> : <EmptyState title="Akademik yıl yok" message="Öğrenci kaydı için önce bir akademik yıl oluşturun." />}</section></div></> }
 
 function Notifications({ refreshKey }: { refreshKey: number }) { const [items, setItems] = useState<Array<{ id: string; title: string; message: string; isRead: boolean; createdAt: string }>>([]); const [error, setError] = useState<unknown>(null); const load = useCallback(() => { apiRequest<Array<{ id: string; title: string; message: string; isRead: boolean; createdAt: string }>>('/api/notifications?page=1&pageSize=100').then(setItems).catch(setError) }, []); useEffect(() => { const timer = window.setTimeout(() => load(), 0); return () => window.clearTimeout(timer) }, [load, refreshKey]); async function mark(id: string) { try { await apiRequest(`/api/notifications/${id}/read`, { method: 'PATCH' }); load() } catch (e) { setError(e) } } return <><PageHeading eyebrow="HESAP" title="Bildirimler" description="Kurum hesabınıza gönderilen güncellemeler." />{error ? <ErrorState error={error} retry={load} /> : items.length ? <div className="panel notification-list">{items.map((n) => <article className={`notification-row ${n.isRead ? '' : 'notification-unread'}`} key={n.id}><span className="notification-icon"><Bell size={17} /></span><div><b>{n.title}</b><p>{n.message}</p><small>{dateLabel(n.createdAt)}</small></div>{!n.isRead && <button className="text-button" onClick={() => void mark(n.id)}>Okundu işaretle</button>}</article>)}</div> : <div className="panel"><EmptyState title="Yeni bildirim yok" message="Öğrenci ve proje çalışmalarınızla ilgili güncellemeler burada görünür." /></div>}</> }

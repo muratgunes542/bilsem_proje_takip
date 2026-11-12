@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs'
-import type { StudentImportRecord } from './import-service'
+import type { StudentImportRecord } from './import-service.js'
 
 export type ImportFileWarning = {
   type: 'UNEXPECTED_COLUMN' | 'UNEXPECTED_ROW' | 'EXTRA_WORKSHEET'
