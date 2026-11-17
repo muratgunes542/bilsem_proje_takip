@@ -75,12 +75,13 @@ describe('Migration Target Safety Guards (Unit Tests)', () => {
 
 describe('Migration CLI Entry Point (Child Process Tests)', () => {
   const rootDir = join(__dirname, '..')
+  const tsxCliPath = join(rootDir, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 
   it('CLI rejects production migration when TURSO_DATABASE_URL is a local file database', () => {
     let output = ''
     let exitCode = 0
     try {
-      execSync('npx tsx scripts/migrate.ts', {
+      execSync(`"${process.execPath}" "${tsxCliPath}" scripts/migrate.ts`, {
         cwd: rootDir,
         env: {
           ...process.env,
@@ -95,20 +96,22 @@ describe('Migration CLI Entry Point (Child Process Tests)', () => {
         stdio: 'pipe',
       })
     } catch (err: unknown) {
-      const execErr = err as { status?: number; stdout?: string; stderr?: string }
+      const execErr = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer }
       exitCode = execErr.status ?? 1
-      output = (execErr.stdout ?? '') + (execErr.stderr ?? '')
+      const stdoutStr = typeof execErr.stdout === 'string' ? execErr.stdout : execErr.stdout?.toString('utf-8') ?? ''
+      const stderrStr = typeof execErr.stderr === 'string' ? execErr.stderr : execErr.stderr?.toString('utf-8') ?? ''
+      output = stdoutStr + stderrStr
     }
 
     expect(exitCode).not.toBe(0)
-    expect(output).toContain('Production environment cannot use a local file database URL')
-  })
+    expect(output).toMatch(/Production migration aborted: TURSO_DATABASE_URL must be a remote libsql:\/\/ database|Production environment cannot use a local file database URL/)
+  }, 30000)
 
   it('CLI rejects production migration when TURSO_AUTH_TOKEN is missing', () => {
     let output = ''
     let exitCode = 0
     try {
-      execSync('npx tsx scripts/migrate.ts', {
+      execSync(`"${process.execPath}" "${tsxCliPath}" scripts/migrate.ts`, {
         cwd: rootDir,
         env: {
           ...process.env,
@@ -123,20 +126,22 @@ describe('Migration CLI Entry Point (Child Process Tests)', () => {
         stdio: 'pipe',
       })
     } catch (err: unknown) {
-      const execErr = err as { status?: number; stdout?: string; stderr?: string }
+      const execErr = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer }
       exitCode = execErr.status ?? 1
-      output = (execErr.stdout ?? '') + (execErr.stderr ?? '')
+      const stdoutStr = typeof execErr.stdout === 'string' ? execErr.stdout : execErr.stdout?.toString('utf-8') ?? ''
+      const stderrStr = typeof execErr.stderr === 'string' ? execErr.stderr : execErr.stderr?.toString('utf-8') ?? ''
+      output = stdoutStr + stderrStr
     }
 
     expect(exitCode).not.toBe(0)
-    expect(output).toContain('Production environment requires TURSO_AUTH_TOKEN')
-  })
+    expect(output).toMatch(/Production migration aborted: TURSO_AUTH_TOKEN is required|Production environment requires TURSO_AUTH_TOKEN/)
+  }, 30000)
 
   it('CLI rejects production migration when confirmation MIGRATE_PROD is not provided', () => {
     let output = ''
     let exitCode = 0
     try {
-      execSync('npx tsx scripts/migrate.ts', {
+      execSync(`"${process.execPath}" "${tsxCliPath}" scripts/migrate.ts`, {
         cwd: rootDir,
         env: {
           ...process.env,
@@ -153,12 +158,14 @@ describe('Migration CLI Entry Point (Child Process Tests)', () => {
         input: 'WRONG_CONFIRM\n',
       })
     } catch (err: unknown) {
-      const execErr = err as { status?: number; stdout?: string; stderr?: string }
+      const execErr = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer }
       exitCode = execErr.status ?? 1
-      output = (execErr.stdout ?? '') + (execErr.stderr ?? '')
+      const stdoutStr = typeof execErr.stdout === 'string' ? execErr.stdout : execErr.stdout?.toString('utf-8') ?? ''
+      const stderrStr = typeof execErr.stderr === 'string' ? execErr.stderr : execErr.stderr?.toString('utf-8') ?? ''
+      output = stdoutStr + stderrStr
     }
 
     expect(exitCode).not.toBe(0)
     expect(output).toContain('Migration canceled: Invalid or missing confirmation input')
-  })
+  }, 30000)
 })

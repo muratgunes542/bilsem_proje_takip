@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { eq } from 'drizzle-orm'
 import { dispatchNodeApi } from '../server/api/router'
 import * as schema from '../server/db/schema'
 
@@ -238,11 +239,12 @@ describe('HTTP API adapter', () => {
     })
     expect(teacherReq.status).toBe(403)
 
-    // 2. Geçersiz öğretmen ekleme isteği (http-admin öğretmen değil) -> 422 Unprocessable Entity
+    // 2. Geçersiz öğretmen ekleme isteği (başka bir yönetici veya öğretmen olmayan kullanıcı ekleme) -> 422 Unprocessable Entity
+    await db.insert(schema.users).values({ id: 'http-admin-2', name: 'HTTP Admin Two', email: 'http-admin-2@test.com', role: 'ADMIN', isActive: true })
     const invalidReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-admin' },
-      body: JSON.stringify({ addUserIds: ['http-admin'] }),
+      body: JSON.stringify({ addUserIds: ['http-admin-2'] }),
     })
     expect(invalidReq.status).toBe(422)
 
@@ -258,5 +260,51 @@ describe('HTTP API adapter', () => {
     const payload = await validReq.json() as { success: boolean; data: { advisors: Array<{ userId: string }> } }
     expect(payload.success).toBe(true)
     expect(payload.data.advisors.map((a) => a.userId)).toContain('http-teacher-2')
+  })
+
+  it('normalizes notification request URLs robustly in getAuthenticatedApiUser', async () => {
+    const { getAuthenticatedApiUser } = await import('../server/api/context.js')
+    const { createAuth } = await import('../server/auth.js')
+    const authInstance = createAuth(db, false)
+
+    const signUpRes = await authInstance.api.signUpEmail({
+      body: { name: 'Context User', email: 'context@test.com', password: 'Password123!' },
+    })
+    const loginRes = await authInstance.handler(new Request('http://localhost/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'context@test.com', password: 'Password123!' }),
+    }))
+    const cookie = loginRes.headers.get('set-cookie')?.split(';')[0] ?? ''
+    const headers = new Headers({ cookie })
+
+    const urls = [
+      '/api/notifications',
+      '/api/notifications/',
+      '/api/notifications?filter=unread',
+      'http://localhost/api/notifications?filter=unread',
+      'https://example.com/api/notifications/stream',
+    ]
+
+    for (const url of urls) {
+      const [beforeSession] = await db.select().from(schema.sessions).where(eq(schema.sessions.userId, signUpRes.user.id))
+      const prevActive = beforeSession?.lastActiveAt
+
+      const user = await getAuthenticatedApiUser({ headers, url }, db)
+      expect(user).not.toBeNull()
+
+      const [afterSession] = await db.select().from(schema.sessions).where(eq(schema.sessions.userId, signUpRes.user.id))
+      expect(afterSession?.lastActiveAt).toEqual(prevActive)
+    }
+
+    const [sessionBefore] = await db.select().from(schema.sessions).where(eq(schema.sessions.userId, signUpRes.user.id))
+    const pastTime = new Date(Date.now() - 600000)
+    await db.update(schema.sessions).set({ lastActiveAt: pastTime }).where(eq(schema.sessions.id, sessionBefore!.id))
+
+    const userInteractive = await getAuthenticatedApiUser({ headers, url: '/api/projects?academicYearId=year-2024' }, db)
+    expect(userInteractive).not.toBeNull()
+
+    const [sessionAfter] = await db.select().from(schema.sessions).where(eq(schema.sessions.userId, signUpRes.user.id))
+    expect(sessionAfter!.lastActiveAt?.getTime()).toBeGreaterThan(pastTime.getTime())
   })
 })

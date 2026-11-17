@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, isNull, like, ne, sql } from 'drizzle-orm'
 import type { LibSQLDatabase } from 'drizzle-orm/libsql'
-import { assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization.js'
+import { assertCanCreateProject, assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization.js'
 import * as schema from '../db/schema.js'
 
 export type AppDatabase = LibSQLDatabase<typeof schema>
@@ -22,9 +22,10 @@ export type CreateProjectInput = {
   academicYearId: string
   categoryId: string
   statusId: string
+  projectType?: schema.ProjectType
   participationType: schema.ParticipationType
   teamName?: string | null
-  enrollmentIds: string[]
+  enrollmentIds?: string[]
   advisorUserIds?: string[]
 }
 
@@ -32,6 +33,7 @@ export type ListProjectsFilters = {
   academicYearId?: string
   categoryId?: string
   statusId?: string
+  projectType?: schema.ProjectType
   studentId?: string
   advisorUserId?: string
   includeArchived?: boolean
@@ -57,7 +59,7 @@ export class ProjectService {
 
   async listProjectOptions(actor: AuthenticatedUser) {
     if (!actor?.isActive || !['ADMIN', 'TEACHER'].includes(actor.role)) throw new AuthorizationError()
-    const [categories, statuses, teachers] = await Promise.all([
+    const [categories, statuses, teacherRows] = await Promise.all([
       this.database.select({
         id: schema.projectCategories.id,
         code: schema.projectCategories.code,
@@ -78,6 +80,17 @@ export class ProjectService {
         .where(and(eq(schema.users.role, 'TEACHER'), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
         .orderBy(schema.users.name),
     ])
+
+    let teachers = teacherRows
+    if (actor.role === 'ADMIN' && !teachers.some((t) => t.id === actor.id)) {
+      const adminUser = await this.database.select({ id: schema.users.id, name: schema.users.name }).from(schema.users)
+        .where(and(eq(schema.users.id, actor.id), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
+        .limit(1)
+      if (adminUser[0]) {
+        teachers = [...teachers, { id: adminUser[0].id, name: `${adminUser[0].name} (Yönetici)` }].sort((a, b) => a.name.localeCompare(b.name, 'tr-TR'))
+      }
+    }
+
     return { categories, statuses, teachers }
   }
 
@@ -103,6 +116,10 @@ export class ProjectService {
       conditions.push(eq(schema.projects.statusId, filters.statusId))
     }
 
+    if (filters.projectType) {
+      conditions.push(eq(schema.projects.projectType, filters.projectType))
+    }
+
     if (filters.search?.trim()) conditions.push(like(schema.projects.title, `%${filters.search.trim()}%`))
 
     if (filters.studentId) {
@@ -124,7 +141,8 @@ export class ProjectService {
     }
 
     if (filters.advisorUserId) {
-      const advisorProjectRows = await this.database
+      // 1. Projects where user is an active explicit advisor
+      const explicitAdvisorRows = await this.database
         .select({ projectId: schema.projectAdvisors.projectId })
         .from(schema.projectAdvisors)
         .where(and(
@@ -132,29 +150,32 @@ export class ProjectService {
           isNull(schema.projectAdvisors.deletedAt)
         ))
 
-      const projectsWithActiveAdvisors = await this.database
-        .select({ projectId: schema.projectAdvisors.projectId })
-        .from(schema.projectAdvisors)
-        .where(isNull(schema.projectAdvisors.deletedAt))
-      const projectsWithActiveAdvisorsSet = new Set(projectsWithActiveAdvisors.map((r) => r.projectId))
-
-      const legacyAdvisorProjectRows = await this.database
+      // 2. Projects where user is an active enrollment advisor and project has ZERO project_advisors rows at all
+      const enrollmentAdvisorProjects = await this.database
         .select({ projectId: schema.projectStudents.projectId })
         .from(schema.projectStudents)
         .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
         .where(and(
           eq(schema.studentEnrollments.advisorUserId, filters.advisorUserId),
-          isNull(schema.projectStudents.deletedAt)
+          eq(schema.studentEnrollments.isActive, true),
+          isNull(schema.projectStudents.deletedAt),
+          isNull(schema.studentEnrollments.deletedAt)
         ))
 
-      const matchingLegacyProjectIds = legacyAdvisorProjectRows
+      const projectsWithAnyAdvisors = await this.database
+        .select({ projectId: schema.projectAdvisors.projectId })
+        .from(schema.projectAdvisors)
+
+      const excludedProjectIds = new Set(projectsWithAnyAdvisors.map((r) => r.projectId))
+      const validEnrollmentProjectIds = enrollmentAdvisorProjects
         .map((r) => r.projectId)
-        .filter((id) => !projectsWithActiveAdvisorsSet.has(id))
+        .filter((pid) => !excludedProjectIds.has(pid))
 
       const projectIds = [...new Set([
-        ...advisorProjectRows.map((r) => r.projectId),
-        ...matchingLegacyProjectIds,
+        ...explicitAdvisorRows.map((r) => r.projectId),
+        ...validEnrollmentProjectIds,
       ])]
+
       if (projectIds.length === 0) return []
       conditions.push(inArray(schema.projects.id, projectIds))
     }
@@ -172,6 +193,7 @@ export class ProjectService {
         statusName: schema.projectStatuses.name,
         createdBy: schema.projects.createdBy,
         creatorName: schema.users.name,
+        projectType: schema.projects.projectType,
         participationType: schema.projects.participationType,
         teamName: schema.projects.teamName,
         createdAt: schema.projects.createdAt,
@@ -187,49 +209,21 @@ export class ProjectService {
     const projects = conditions.length > 0 ? await baseQuery.where(and(...conditions)) : await baseQuery
     if (!projects.length) return []
     const ids = projects.map((project) => project.id)
-    const [members, advisors, legacyEnrollmentAdvisors] = await Promise.all([
+    const [members, advisorsMap] = await Promise.all([
       this.database.select({ projectId: schema.projectStudents.projectId, name: schema.students.firstName, surname: schema.students.lastName })
         .from(schema.projectStudents).innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
         .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
         .where(and(inArray(schema.projectStudents.projectId, ids), isNull(schema.projectStudents.deletedAt))),
-      this.database.select({ projectId: schema.projectAdvisors.projectId, userId: schema.projectAdvisors.userId, name: sql<string>`coalesce(${schema.users.name}, 'Bilinmeyen Danışman')` })
-        .from(schema.projectAdvisors)
-        .leftJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
-        .where(and(inArray(schema.projectAdvisors.projectId, ids), isNull(schema.projectAdvisors.deletedAt))),
-      this.database.select({
-        projectId: schema.projectStudents.projectId,
-        advisorUserId: schema.studentEnrollments.advisorUserId,
-        advisorName: schema.studentEnrollments.advisorName,
-        teacherName: schema.users.name,
-      })
-        .from(schema.projectStudents)
-        .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
-        .leftJoin(schema.users, eq(schema.users.id, schema.studentEnrollments.advisorUserId))
-        .where(and(inArray(schema.projectStudents.projectId, ids), isNull(schema.projectStudents.deletedAt))),
+      this.resolveProjectAdvisors(this.database, ids),
     ])
+
     return projects.map((project) => {
-      const projectAdvisorRows = advisors.filter((advisor) => advisor.projectId === project.id)
+      const projectAdvisors = advisorsMap.get(project.id) ?? []
       const names = new Set<string>()
 
-      if (projectAdvisorRows.length > 0) {
-        for (const adv of projectAdvisorRows) {
-          if (adv.name) {
-            names.add(adv.name)
-          }
-        }
-      } else {
-        const legacyRows = legacyEnrollmentAdvisors.filter((l) => l.projectId === project.id)
-        const seenUserIds = new Set<string>()
-        const seenNames = new Set<string>()
-        for (const l of legacyRows) {
-          const name = l.teacherName || l.advisorName
-          if (!name) continue
-          if (l.advisorUserId && seenUserIds.has(l.advisorUserId)) continue
-          if (seenNames.has(name.toLocaleLowerCase('tr-TR'))) continue
-
-          if (l.advisorUserId) seenUserIds.add(l.advisorUserId)
-          seenNames.add(name.toLocaleLowerCase('tr-TR'))
-          names.add(name)
+      for (const adv of projectAdvisors) {
+        if (adv.name) {
+          names.add(adv.name)
         }
       }
 
@@ -257,6 +251,7 @@ export class ProjectService {
         statusName: schema.projectStatuses.name,
         createdBy: schema.projects.createdBy,
         creatorName: schema.users.name,
+        projectType: schema.projects.projectType,
         participationType: schema.projects.participationType,
         teamName: schema.projects.teamName,
         createdAt: schema.projects.createdAt,
@@ -275,79 +270,120 @@ export class ProjectService {
     if (!project || (project.deletedAt !== null && actor.role !== 'ADMIN')) throw new ResourceNotFoundError('Proje bulunamadı.')
 
     const students = await this.getProjectMembers(actor, projectId)
-
-    const explicitAdvisors = await this.database
-      .select({
-        userId: schema.users.id,
-        name: sql<string>`coalesce(${schema.users.name}, 'Bilinmeyen Danışman')`,
-        email: sql<string>`coalesce(${schema.users.email}, '')`,
-        isPrimary: schema.projectAdvisors.isPrimary,
-      })
-      .from(schema.projectAdvisors)
-      .leftJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
-      .where(and(
-        eq(schema.projectAdvisors.projectId, projectId),
-        isNull(schema.projectAdvisors.deletedAt),
-      ))
-
-    const enrollmentAdvisors = await this.database
-      .select({
-        advisorUserId: schema.studentEnrollments.advisorUserId,
-        advisorName: schema.studentEnrollments.advisorName,
-        teacherName: schema.users.name,
-        teacherEmail: schema.users.email,
-      })
-      .from(schema.projectStudents)
-      .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
-      .leftJoin(schema.users, eq(schema.users.id, schema.studentEnrollments.advisorUserId))
-      .where(and(
-        eq(schema.projectStudents.projectId, projectId),
-        isNull(schema.projectStudents.deletedAt),
-      ))
-
-    const seenUserIds = new Set<string>()
-    const seenNames = new Set<string>()
-    const combinedAdvisors: Array<{ userId: string; name: string; email: string; isPrimary: boolean }> = []
-
-    if (explicitAdvisors.length > 0) {
-      for (const adv of explicitAdvisors) {
-        if (adv.userId) seenUserIds.add(adv.userId)
-        if (adv.name) seenNames.add(adv.name.toLocaleLowerCase('tr-TR'))
-        combinedAdvisors.push({
-          userId: adv.userId ?? '',
-          name: adv.name,
-          email: adv.email ?? '',
-          isPrimary: adv.isPrimary,
-        })
-      }
-    } else {
-      for (const l of enrollmentAdvisors) {
-        const name = l.teacherName || l.advisorName
-        if (!name) continue
-        const userId = l.advisorUserId ?? `legacy:${name}`
-
-        if (l.advisorUserId && seenUserIds.has(l.advisorUserId)) continue
-        if (seenNames.has(name.toLocaleLowerCase('tr-TR'))) continue
-
-        if (l.advisorUserId) seenUserIds.add(l.advisorUserId)
-        seenNames.add(name.toLocaleLowerCase('tr-TR'))
-
-        combinedAdvisors.push({
-          userId,
-          name,
-          email: l.teacherEmail ?? '',
-          isPrimary: combinedAdvisors.length === 0,
-        })
-      }
-    }
-
-    const advisors = combinedAdvisors
+    const advisorsMap = await this.resolveProjectAdvisors(this.database, [projectId])
+    const advisors = advisorsMap.get(projectId) ?? []
 
     return {
       project,
       students,
       advisors,
     }
+  }
+
+  async resolveProjectAdvisors(
+    transactionOrDb: AppDatabase | Parameters<Parameters<AppDatabase['transaction']>[0]>[0],
+    projectIds: string[],
+  ) {
+    if (projectIds.length === 0) return new Map()
+
+    const [explicitActive, allAdvisorRows, enrollmentAdvisorRows] = await Promise.all([
+      transactionOrDb.select({
+        projectId: schema.projectAdvisors.projectId,
+        userId: schema.projectAdvisors.userId,
+        name: sql<string>`coalesce(${schema.users.name}, 'Bilinmeyen Danışman')`,
+        email: sql<string>`coalesce(${schema.users.email}, '')`,
+        isPrimary: schema.projectAdvisors.isPrimary,
+      })
+        .from(schema.projectAdvisors)
+        .leftJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+        .where(and(inArray(schema.projectAdvisors.projectId, projectIds), isNull(schema.projectAdvisors.deletedAt))),
+
+      transactionOrDb.select({
+        projectId: schema.projectAdvisors.projectId,
+        userId: schema.projectAdvisors.userId,
+        deletedAt: schema.projectAdvisors.deletedAt,
+      })
+        .from(schema.projectAdvisors)
+        .where(inArray(schema.projectAdvisors.projectId, projectIds)),
+
+      transactionOrDb.select({
+        projectId: schema.projectStudents.projectId,
+        userId: schema.studentEnrollments.advisorUserId,
+        advisorName: schema.studentEnrollments.advisorName,
+        name: sql<string>`coalesce(${schema.users.name}, ${schema.studentEnrollments.advisorName}, 'Bilinmeyen Danışman')`,
+        email: sql<string>`coalesce(${schema.users.email}, '')`,
+      })
+        .from(schema.projectStudents)
+        .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+        .leftJoin(schema.users, eq(schema.users.id, schema.studentEnrollments.advisorUserId))
+        .where(and(
+          inArray(schema.projectStudents.projectId, projectIds),
+          isNull(schema.projectStudents.deletedAt),
+          isNull(schema.studentEnrollments.deletedAt),
+          eq(schema.studentEnrollments.isActive, true),
+        )),
+    ])
+
+    const explicitActiveMap = new Map<string, Array<{ userId: string; name: string; email: string; isPrimary: boolean; source: 'EXPLICIT' | 'ENROLLMENT' }>>()
+    for (const row of explicitActive) {
+      if (!explicitActiveMap.has(row.projectId)) {
+        explicitActiveMap.set(row.projectId, [])
+      }
+      explicitActiveMap.get(row.projectId)!.push({
+        userId: row.userId ?? '',
+        name: row.name,
+        email: row.email ?? '',
+        isPrimary: row.isPrimary,
+        source: 'EXPLICIT',
+      })
+    }
+
+    const allKnownUserMap = new Map<string, Set<string>>()
+    for (const row of allAdvisorRows) {
+      if (!allKnownUserMap.has(row.projectId)) {
+        allKnownUserMap.set(row.projectId, new Set())
+      }
+      allKnownUserMap.get(row.projectId)!.add(row.userId)
+    }
+
+    const result = new Map<string, Array<{ userId: string; name: string; email: string; isPrimary: boolean; source: 'EXPLICIT' | 'ENROLLMENT' }>>()
+
+    for (const pid of projectIds) {
+      const projectExplicit = explicitActiveMap.get(pid) ?? []
+      const projectAllKnown = allKnownUserMap.get(pid) ?? new Set()
+
+      if (projectAllKnown.size > 0) {
+        // Modern/decoupled project (has explicit project advisor records): use explicit active advisors only
+        result.set(pid, projectExplicit)
+      } else {
+        // Truly old legacy project (zero project_advisors records in total): fallback to student enrollments
+        const projectEnrollmentAdvisors = enrollmentAdvisorRows.filter((e) => e.projectId === pid)
+        const legacyList: Array<{ userId: string; name: string; email: string; isPrimary: boolean; source: 'EXPLICIT' | 'ENROLLMENT' }> = []
+        const seenUserIds = new Set<string>()
+
+        for (const ea of projectEnrollmentAdvisors) {
+          const uId = ea.userId ?? (ea.advisorName ? (ea.advisorName.startsWith('legacy:') ? ea.advisorName : `legacy:${ea.advisorName}`) : null)
+          const advName = ea.name !== 'Bilinmeyen Danışman' ? ea.name : (ea.advisorName ?? 'Bilinmeyen Danışman')
+
+          if (
+            uId &&
+            !seenUserIds.has(uId)
+          ) {
+            seenUserIds.add(uId)
+            legacyList.push({
+              userId: uId,
+              name: advName,
+              email: ea.email ?? '',
+              isPrimary: false,
+              source: 'ENROLLMENT',
+            })
+          }
+        }
+        result.set(pid, legacyList)
+      }
+    }
+
+    return result
   }
 
   async getProjectMembers(actor: AuthenticatedUser, projectId: string) {
@@ -375,32 +411,39 @@ export class ProjectService {
 
   async createProject(actor: AuthenticatedUser, input: CreateProjectInput) {
     if (!actor.isActive || !['ADMIN', 'TEACHER'].includes(actor.role)) throw new AuthorizationError()
-    this.validateParticipation(input.participationType, input.enrollmentIds)
+    const effectiveProjectType = input.projectType ?? 'STUDENT'
+    assertCanCreateProject(actor, effectiveProjectType)
+
+    const enrollmentIds = input.enrollmentIds ?? []
+    this.validateParticipation(input.participationType, enrollmentIds, effectiveProjectType)
 
     return this.database.transaction(async (transaction) => {
-      const uniqueEnrollmentIds = [...new Set(input.enrollmentIds)]
-      if (uniqueEnrollmentIds.length !== input.enrollmentIds.length) {
+      const uniqueEnrollmentIds = [...new Set(enrollmentIds)]
+      if (uniqueEnrollmentIds.length !== enrollmentIds.length) {
         throw new ProjectRuleError('Aynı öğrenci aynı projeye birden fazla eklenemez.')
       }
 
-      const enrollmentRows = await transaction
-        .select({
-          enrollmentId: schema.studentEnrollments.id,
-          academicYearId: schema.studentEnrollments.academicYearId,
-          isActive: schema.studentEnrollments.isActive,
-          studentId: schema.students.id,
-          bilsemNo: schema.students.bilsemNo,
-        })
-        .from(schema.studentEnrollments)
-        .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
-        .where(and(inArray(schema.studentEnrollments.id, uniqueEnrollmentIds), isNull(schema.studentEnrollments.deletedAt)))
+      let selectedEnrollments: Array<{ enrollmentId: string; academicYearId: string; isActive: boolean; studentId: string; bilsemNo: string }> = []
+      if (uniqueEnrollmentIds.length > 0) {
+        const enrollmentRows = await transaction
+          .select({
+            enrollmentId: schema.studentEnrollments.id,
+            academicYearId: schema.studentEnrollments.academicYearId,
+            isActive: schema.studentEnrollments.isActive,
+            studentId: schema.students.id,
+            bilsemNo: schema.students.bilsemNo,
+          })
+          .from(schema.studentEnrollments)
+          .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
+          .where(and(inArray(schema.studentEnrollments.id, uniqueEnrollmentIds), isNull(schema.studentEnrollments.deletedAt)))
 
-      const selectedEnrollments = enrollmentRows.filter((row) => uniqueEnrollmentIds.includes(row.enrollmentId))
-      if (selectedEnrollments.length !== uniqueEnrollmentIds.length) {
-        throw new ProjectRuleError('Bir veya daha fazla öğrenci kaydı bulunamadı.')
-      }
-      if (selectedEnrollments.some((row) => !row.isActive || row.academicYearId !== input.academicYearId)) {
-        throw new ProjectRuleError('Öğrenciler yalnızca projenin akademik yılındaki aktif kayıtlardan seçilebilir.')
+        selectedEnrollments = enrollmentRows.filter((row) => uniqueEnrollmentIds.includes(row.enrollmentId))
+        if (selectedEnrollments.length !== uniqueEnrollmentIds.length) {
+          throw new ProjectRuleError('Bir veya daha fazla öğrenci kaydı bulunamadı.')
+        }
+        if (selectedEnrollments.some((row) => !row.isActive || row.academicYearId !== input.academicYearId)) {
+          throw new ProjectRuleError('Öğrenciler yalnızca projenin akademik yılındaki aktif kayıtlardan seçilebilir.')
+        }
       }
 
       const projectId = randomUUID()
@@ -412,35 +455,60 @@ export class ProjectService {
         categoryId: input.categoryId,
         statusId: input.statusId,
         createdBy: actor.id,
+        projectType: effectiveProjectType,
         participationType: input.participationType,
         teamName: input.participationType === 'TEAM' ? input.teamName : null,
       })
 
-      await transaction.insert(schema.projectStudents).values(uniqueEnrollmentIds.map((enrollmentId) => ({
-        projectId,
-        enrollmentId,
-      })))
+      if (uniqueEnrollmentIds.length > 0) {
+        await transaction.insert(schema.projectStudents).values(uniqueEnrollmentIds.map((enrollmentId) => ({
+          projectId,
+          enrollmentId,
+        })))
+      }
 
       if (actor.role === 'TEACHER') {
         if (input.advisorUserIds !== undefined && input.advisorUserIds !== null) {
           throw new ProjectRuleError('Öğretmenler danışman seçimi yapamaz.')
         }
-        await this.syncProjectAdvisors(transaction, projectId)
+        await transaction.insert(schema.projectAdvisors).values({
+          projectId,
+          userId: actor.id,
+          isPrimary: true,
+        }).onConflictDoNothing()
       } else {
         if (input.advisorUserIds !== undefined && input.advisorUserIds !== null && input.advisorUserIds.length > 0) {
           const uniqueAdvisorIds = [...new Set(input.advisorUserIds)]
-          const validTeachers = await transaction
-            .select({ id: schema.users.id })
-            .from(schema.users)
-            .where(and(
-              inArray(schema.users.id, uniqueAdvisorIds),
-              eq(schema.users.role, 'TEACHER'),
-              eq(schema.users.isActive, true),
-              isNull(schema.users.deletedAt),
-            ))
 
-          if (validTeachers.length !== uniqueAdvisorIds.length) {
-            throw new ProjectRuleError('Seçilen danışman aktif bir öğretmen olmalıdır.')
+          for (const userId of uniqueAdvisorIds) {
+            if (userId === actor.id) {
+              const activeUser = await transaction
+                .select({ id: schema.users.id })
+                .from(schema.users)
+                .where(and(
+                  eq(schema.users.id, userId),
+                  eq(schema.users.isActive, true),
+                  isNull(schema.users.deletedAt),
+                ))
+                .limit(1)
+              if (!activeUser[0]) {
+                throw new ProjectRuleError('Seçilen danışman aktif bir kullanıcı olmalıdır.')
+              }
+            } else {
+              const validTeacher = await transaction
+                .select({ id: schema.users.id })
+                .from(schema.users)
+                .where(and(
+                  eq(schema.users.id, userId),
+                  eq(schema.users.role, 'TEACHER'),
+                  eq(schema.users.isActive, true),
+                  isNull(schema.users.deletedAt),
+                ))
+                .limit(1)
+              if (!validTeacher[0]) {
+                throw new ProjectRuleError('Seçilen danışman aktif bir öğretmen olmalıdır.')
+              }
+            }
           }
 
           await transaction.insert(schema.projectAdvisors).values(
@@ -450,9 +518,29 @@ export class ProjectService {
               isPrimary: index === 0,
             }))
           ).onConflictDoNothing()
-        } else {
-          await this.syncProjectAdvisors(transaction, projectId)
+        } else if (effectiveProjectType !== 'INSTITUTION') {
+          // ADMIN did not select advisors for STUDENT / TEACHER project -> ADMIN creator (actor.id) is default primary advisor
+          const activeUser = await transaction
+            .select({ id: schema.users.id })
+            .from(schema.users)
+            .where(and(
+              eq(schema.users.id, actor.id),
+              eq(schema.users.isActive, true),
+              isNull(schema.users.deletedAt),
+            ))
+            .limit(1)
+
+          if (!activeUser[0]) {
+            throw new ProjectRuleError('Proje sahibi aktif bir kullanıcı olmalıdır.')
+          }
+
+          await transaction.insert(schema.projectAdvisors).values({
+            projectId,
+            userId: actor.id,
+            isPrimary: true,
+          }).onConflictDoNothing()
         }
+        // For INSTITUTION projects, if ADMIN does not specify advisors, 0 advisors are assigned upon creation.
       }
 
       const category = await transaction
@@ -465,7 +553,7 @@ export class ProjectService {
         .limit(1)
 
       const conflicts: ProjectConflict[] = []
-      if (category[0]?.duplicateCheckEnabled && category[0].duplicateRule === 'ACADEMIC_YEAR_STUDENT_CATEGORY') {
+      if (category[0]?.duplicateCheckEnabled && category[0].duplicateRule === 'ACADEMIC_YEAR_STUDENT_CATEGORY' && selectedEnrollments.length > 0) {
         for (const enrollment of selectedEnrollments) {
           await transaction.insert(schema.projectDuplicateClaims).values({
             academicYearId: input.academicYearId,
@@ -510,7 +598,7 @@ export class ProjectService {
         action: 'PROJECT_CREATED',
         entityType: 'PROJECT',
         entityId: projectId,
-        afterJson: JSON.stringify({ ...input, enrollmentIds: uniqueEnrollmentIds }),
+        afterJson: JSON.stringify({ ...input, projectType: effectiveProjectType, enrollmentIds: uniqueEnrollmentIds }),
       })
 
       if (conflicts.length > 0) {
@@ -619,204 +707,8 @@ export class ProjectService {
       })
     })
   }
-  async syncProjectAdvisors(
-    databaseOrProjectId: AppDatabase | Parameters<Parameters<AppDatabase['transaction']>[0]>[0] | string,
-    projectId?: string,
-    creatorId?: string,
-  ) {
-    const database = typeof databaseOrProjectId === 'string' ? this.database : databaseOrProjectId
-    const targetProjectId = typeof databaseOrProjectId === 'string' ? databaseOrProjectId : projectId!
 
-    const project = await this.getProject(database, targetProjectId, true)
-    const effectiveCreatorId = creatorId || project.createdBy
-
-    // Projenin aktif üyelerini ve geçerli danışmanlarını al.
-    const memberAdvisors = await database
-      .select({
-        enrollmentId: schema.projectStudents.enrollmentId,
-        advisorUserId: schema.users.id,
-      })
-      .from(schema.projectStudents)
-      .innerJoin(
-        schema.studentEnrollments,
-        eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId),
-      )
-      .leftJoin(
-        schema.users,
-        and(
-          eq(schema.users.id, schema.studentEnrollments.advisorUserId),
-          eq(schema.users.role, 'TEACHER'),
-          eq(schema.users.isActive, true),
-          isNull(schema.users.deletedAt),
-        ),
-      )
-      .where(and(
-        eq(schema.projectStudents.projectId, targetProjectId),
-        isNull(schema.projectStudents.deletedAt),
-        isNull(schema.studentEnrollments.deletedAt),
-        eq(schema.studentEnrollments.isActive, true),
-      ))
-
-    // Mevcut danışmanları koru.
-    const existingRows = await database
-      .select({
-        userId: schema.projectAdvisors.userId,
-      })
-      .from(schema.projectAdvisors)
-      .where(and(
-        eq(schema.projectAdvisors.projectId, targetProjectId),
-        isNull(schema.projectAdvisors.deletedAt),
-      ))
-
-    const existingIds = new Set(existingRows.map((row) => row.userId))
-    const requiredIds = new Set<string>()
-
-    // Danışmanı olmayan öğrenciler için proje sahibini yedek danışman olarak değerlendir.
-    const hasStudentWithoutAdvisor = memberAdvisors.some(
-      (row) => !row.advisorUserId,
-    )
-
-    for (const row of memberAdvisors) {
-      if (row.advisorUserId) {
-        requiredIds.add(row.advisorUserId)
-      }
-    }
-
-    if ((hasStudentWithoutAdvisor || requiredIds.size === 0) && effectiveCreatorId) {
-      const creatorTeacher = await database
-        .select({ id: schema.users.id })
-        .from(schema.users)
-        .where(and(
-          eq(schema.users.id, effectiveCreatorId),
-          eq(schema.users.role, 'TEACHER'),
-          eq(schema.users.isActive, true),
-          isNull(schema.users.deletedAt),
-        ))
-        .limit(1)
-
-      if (creatorTeacher[0]) {
-        requiredIds.add(creatorTeacher[0].id)
-      }
-    }
-
-    const missingIds = [...requiredIds].filter((id) => !existingIds.has(id))
-
-    if (missingIds.length > 0) {
-      await database
-        .insert(schema.projectAdvisors)
-        .values(missingIds.map((userId) => ({
-          projectId: targetProjectId,
-          userId,
-          isPrimary: existingIds.size === 0 && missingIds[0] === userId,
-        })))
-        .onConflictDoUpdate({
-          target: [schema.projectAdvisors.projectId, schema.projectAdvisors.userId],
-          set: {
-            deletedAt: null,
-            deletedBy: null,
-            updatedAt: new Date(),
-          },
-        })
-    }
-  }
-
-  private async attachEnrollmentAdvisors(
-    database: AppDatabase | Parameters<Parameters<AppDatabase['transaction']>[0]>[0],
-    projectId: string,
-    enrollmentIds: string[],
-    creatorId: string,
-  ) {
-    if (enrollmentIds.length === 0) return
-
-    const existingAdvisors = await database
-      .select({
-        userId: schema.projectAdvisors.userId,
-        isPrimary: schema.projectAdvisors.isPrimary,
-      })
-      .from(schema.projectAdvisors)
-      .where(and(
-        eq(schema.projectAdvisors.projectId, projectId),
-        isNull(schema.projectAdvisors.deletedAt),
-      ))
-
-    const existingAdvisorIds = new Set(existingAdvisors.map((row) => row.userId))
-    const advisorsToAdd = new Set<string>()
-
-    const memberAdvisors = await database
-      .select({
-        enrollmentId: schema.studentEnrollments.id,
-        advisorUserId: schema.users.id,
-      })
-      .from(schema.studentEnrollments)
-      .leftJoin(
-        schema.users,
-        and(
-          eq(schema.users.id, schema.studentEnrollments.advisorUserId),
-          eq(schema.users.role, 'TEACHER'),
-          eq(schema.users.isActive, true),
-          isNull(schema.users.deletedAt),
-        ),
-      )
-      .where(and(
-        inArray(schema.studentEnrollments.id, enrollmentIds),
-        isNull(schema.studentEnrollments.deletedAt),
-        eq(schema.studentEnrollments.isActive, true),
-      ))
-
-    let hasStudentWithoutAdvisor = false
-
-    for (const row of memberAdvisors) {
-      if (row.advisorUserId) {
-        if (!existingAdvisorIds.has(row.advisorUserId)) {
-          advisorsToAdd.add(row.advisorUserId)
-        }
-      } else {
-        hasStudentWithoutAdvisor = true
-      }
-    }
-
-    if (hasStudentWithoutAdvisor && creatorId && !existingAdvisorIds.has(creatorId) && !advisorsToAdd.has(creatorId)) {
-      const creatorTeacher = await database
-        .select({ id: schema.users.id })
-        .from(schema.users)
-        .where(and(
-          eq(schema.users.id, creatorId),
-          eq(schema.users.role, 'TEACHER'),
-          eq(schema.users.isActive, true),
-          isNull(schema.users.deletedAt),
-        ))
-        .limit(1)
-
-      if (creatorTeacher[0]) {
-        advisorsToAdd.add(creatorTeacher[0].id)
-      }
-    }
-
-    let hasExistingPrimary = existingAdvisors.some((a) => a.isPrimary)
-    for (const userId of advisorsToAdd) {
-      const isPrimary = !hasExistingPrimary
-      await database
-        .insert(schema.projectAdvisors)
-        .values({
-          projectId,
-          userId,
-          isPrimary,
-        })
-        .onConflictDoUpdate({
-          target: [schema.projectAdvisors.projectId, schema.projectAdvisors.userId],
-          set: {
-            deletedAt: null,
-            deletedBy: null,
-            updatedAt: new Date(),
-          },
-        })
-      if (isPrimary) {
-        hasExistingPrimary = true
-      }
-    }
-  }
-
-    async addTeamMember(actor: AuthenticatedUser, projectId: string, enrollmentId: string) {
+  async addTeamMember(actor: AuthenticatedUser, projectId: string, enrollmentId: string) {
     return this.changeTeamMember(actor, projectId, enrollmentId, 'ADD')
   }
 
@@ -854,8 +746,6 @@ export class ProjectService {
           target: [schema.projectStudents.projectId, schema.projectStudents.enrollmentId],
           set: { deletedAt: null, deletedBy: null, updatedAt: new Date() },
         })
-
-        await this.attachEnrollmentAdvisors(transaction, projectId, [enrollmentId], project.createdBy)
       } else {
         if (members.length <= 2) throw new ProjectRuleError('Takım projesinde en az iki öğrenci bulunmalıdır.')
         if (!members.some((member) => member.enrollmentId === enrollmentId)) {
@@ -1008,8 +898,6 @@ export class ProjectService {
           set: { deletedAt: null, deletedBy: null, updatedAt: new Date() },
         })
       }
-
-      await this.attachEnrollmentAdvisors(transaction, projectId, uniqueAdditionalIds, project.createdBy)
 
       const conflicts: ProjectConflict[] = []
       const category = await transaction.select({
@@ -1184,7 +1072,14 @@ export class ProjectService {
     return this.database.transaction(async (transaction) => {
       const project = await this.getProject(transaction, projectId)
 
-      // 1. Mevcut aktif danışmanlar
+      // 1. Audit için gerçek önceki danışmanlar (fallback eklenmeden ÖNCE)
+      const beforeAdvisors = await transaction
+        .select({ userId: schema.users.id, name: schema.users.name, isPrimary: schema.projectAdvisors.isPrimary })
+        .from(schema.projectAdvisors)
+        .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
+        .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
+
+      // 2. Mevcut aktif danışmanlar
       let existingActive = await transaction
         .select({
           userId: schema.projectAdvisors.userId,
@@ -1196,82 +1091,35 @@ export class ProjectService {
           isNull(schema.projectAdvisors.deletedAt),
         ))
 
-      // Kural 13: Eski projeler - aktif danışmanlar 0 ise önceden kayıtlı danışmanları oluştur
-      if (existingActive.length === 0) {
-        // Öğrenci kayıtlarından danışmanları al (yalnızca aktif kayıtlar)
-        const enrollmentAdvisors = await transaction
-          .select({ advisorUserId: schema.studentEnrollments.advisorUserId })
-          .from(schema.projectStudents)
-          .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
-          .where(and(
-            eq(schema.projectStudents.projectId, projectId),
-            isNull(schema.projectStudents.deletedAt),
-            isNull(schema.studentEnrollments.deletedAt),
-            eq(schema.studentEnrollments.isActive, true),
-          ))
-
-        const candidateIds = [...new Set(enrollmentAdvisors.map((r) => r.advisorUserId).filter(Boolean))] as string[]
-        let validTeacherIds: string[] = []
-
-        if (candidateIds.length > 0) {
-          const validTeachers = await transaction
-            .select({ id: schema.users.id })
-            .from(schema.users)
-            .where(and(
-              inArray(schema.users.id, candidateIds),
-              eq(schema.users.role, 'TEACHER'),
-              eq(schema.users.isActive, true),
-              isNull(schema.users.deletedAt),
-            ))
-          validTeacherIds = validTeachers.map((t) => t.id)
-        }
-
-        if (validTeacherIds.length > 0) {
-          const now = new Date()
-          for (let i = 0; i < validTeacherIds.length; i++) {
-            await transaction.insert(schema.projectAdvisors)
-              .values({ projectId, userId: validTeacherIds[i]!, isPrimary: i === 0, createdAt: now, updatedAt: now })
-              .onConflictDoUpdate({
-                target: [schema.projectAdvisors.projectId, schema.projectAdvisors.userId],
-                set: { deletedAt: null, deletedBy: null, isPrimary: i === 0, updatedAt: now },
-              })
-          }
-        } else {
-          const creatorTeacher = await transaction
-            .select({ id: schema.users.id }).from(schema.users)
+      // Proje danışmanı bulunmayan eski projelerde, eğer yeni danışman eklenmiyorsa fallback dene
+      if (existingActive.length === 0 && toAdd.length === 0) {
+        if (project.projectType !== 'INSTITUTION') {
+          const creatorUser = await transaction
+            .select({ id: schema.users.id, role: schema.users.role }).from(schema.users)
             .where(and(
               eq(schema.users.id, project.createdBy),
-              eq(schema.users.role, 'TEACHER'),
               eq(schema.users.isActive, true),
               isNull(schema.users.deletedAt),
             )).limit(1)
 
-          if (creatorTeacher[0]) {
+          if (creatorUser[0] && (creatorUser[0].role === 'TEACHER' || creatorUser[0].id === actor.id)) {
             const now = new Date()
             await transaction.insert(schema.projectAdvisors)
-              .values({ projectId, userId: creatorTeacher[0].id, isPrimary: true, createdAt: now, updatedAt: now })
+              .values({ projectId, userId: creatorUser[0].id, isPrimary: true, createdAt: now, updatedAt: now })
               .onConflictDoUpdate({
                 target: [schema.projectAdvisors.projectId, schema.projectAdvisors.userId],
                 set: { deletedAt: null, deletedBy: null, isPrimary: true, updatedAt: now },
               })
           } else {
-            throw new ProjectRuleError('Eski projeye ait geçerli bir danışman bulunamadığı için işlem yapılamaz.')
+            throw new ProjectRuleError('Eski projeye ait geçerli bir proje danışmanı bulunamadı. Lütfen önce bir danışman belirleyin.')
           }
         }
 
-        // Yeniden sor
         existingActive = await transaction
           .select({ userId: schema.projectAdvisors.userId, isPrimary: schema.projectAdvisors.isPrimary })
           .from(schema.projectAdvisors)
           .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
       }
-
-      // Audit için önceki danışmanlar
-      const beforeAdvisors = await transaction
-        .select({ userId: schema.users.id, name: schema.users.name, isPrimary: schema.projectAdvisors.isPrimary })
-        .from(schema.projectAdvisors)
-        .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
-        .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
 
       const existingActiveIds = new Set(existingActive.map((a) => a.userId))
 
@@ -1292,24 +1140,39 @@ export class ProjectService {
         }
       }
 
-      // Kural 7: Yalnızca aktif TEACHER hesapları eklenebilsin
+      // Yalnızca aktif TEACHER veya acting ADMIN kendi hesabı eklenebilsin
       if (toAdd.length > 0) {
-        const validTeachers = await transaction
-          .select({ id: schema.users.id }).from(schema.users)
-          .where(and(
-            inArray(schema.users.id, toAdd),
-            eq(schema.users.role, 'TEACHER'),
-            eq(schema.users.isActive, true),
-            isNull(schema.users.deletedAt),
-          ))
-        if (validTeachers.length !== toAdd.length) {
-          throw new ProjectRuleError('Yalnızca aktif öğretmen hesapları danışman olarak eklenebilir.')
+        for (const userId of toAdd) {
+          if (userId === actor.id) {
+            const activeUser = await transaction
+              .select({ id: schema.users.id }).from(schema.users)
+              .where(and(
+                eq(schema.users.id, userId),
+                eq(schema.users.isActive, true),
+                isNull(schema.users.deletedAt),
+              )).limit(1)
+            if (!activeUser[0]) {
+              throw new ProjectRuleError('Yalnızca aktif kullanıcı hesapları danışman olarak eklenebilir.')
+            }
+          } else {
+            const validTeacher = await transaction
+              .select({ id: schema.users.id }).from(schema.users)
+              .where(and(
+                eq(schema.users.id, userId),
+                eq(schema.users.role, 'TEACHER'),
+                eq(schema.users.isActive, true),
+                isNull(schema.users.deletedAt),
+              )).limit(1)
+            if (!validTeacher[0]) {
+              throw new ProjectRuleError('Seçilen danışman aktif bir öğretmen olmalıdır.')
+            }
+          }
         }
       }
 
-      // Kural 9: En az 1 aktif danışman
+      // En az 1 aktif danışman (STUDENT / TEACHER için zorunlu, INSTITUTION için 0 mümkün)
       const remainingCount = (existingActive.length - toRemove.length) + toAdd.length
-      if (remainingCount < 1) {
+      if (remainingCount < 1 && project.projectType !== 'INSTITUTION') {
         throw new ProjectRuleError('Bir projede en az bir aktif danışman bulunmalıdır.')
       }
 
@@ -1322,14 +1185,14 @@ export class ProjectService {
         .where(eq(schema.projectAdvisors.projectId, projectId))
       const allRowsMap = new Map(allRows.map((r) => [r.userId, r]))
 
-      // Kural 10: Soft-delete
+      // Soft-delete
       for (const userId of toRemove) {
         await transaction.update(schema.projectAdvisors)
           .set({ deletedAt: now, deletedBy: actor.id, updatedAt: now })
           .where(and(eq(schema.projectAdvisors.projectId, projectId), eq(schema.projectAdvisors.userId, userId)))
       }
 
-      // Kural 11: Yeniden ekleme / reactivation
+      // Yeniden ekleme / reactivation
       for (const userId of toAdd) {
         const existingRow = allRowsMap.get(userId)
         if (existingRow) {
@@ -1342,21 +1205,23 @@ export class ProjectService {
         }
       }
 
-      // Rigorous Primary Advisor Reconciliation: Exactly one active primary advisor
+      // Rigorous Primary Advisor Reconciliation: Exactly one active primary advisor (if any advisors exist)
       const currentActive = await transaction
         .select({ userId: schema.projectAdvisors.userId, isPrimary: schema.projectAdvisors.isPrimary })
         .from(schema.projectAdvisors)
         .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
 
-      const removedSet = new Set(toRemove)
-      const existingPrimary = existingActive.find((a) => a.isPrimary && !removedSet.has(a.userId))
+      let chosenPrimaryUserId: string | null = null
+      if (currentActive.length > 0) {
+        const removedSet = new Set(toRemove)
+        const existingPrimary = existingActive.find((a) => a.isPrimary && !removedSet.has(a.userId))
 
-      let chosenPrimaryUserId: string
-      if (existingPrimary && currentActive.some((a) => a.userId === existingPrimary.userId)) {
-        chosenPrimaryUserId = existingPrimary.userId
-      } else {
-        const sortedActive = [...currentActive].sort((a, b) => a.userId.localeCompare(b.userId))
-        chosenPrimaryUserId = sortedActive[0]!.userId
+        if (existingPrimary && currentActive.some((a) => a.userId === existingPrimary.userId)) {
+          chosenPrimaryUserId = existingPrimary.userId
+        } else {
+          const sortedActive = [...currentActive].sort((a, b) => a.userId.localeCompare(b.userId))
+          chosenPrimaryUserId = sortedActive[0]!.userId
+        }
       }
 
       for (const adv of currentActive) {
@@ -1378,7 +1243,7 @@ export class ProjectService {
         .innerJoin(schema.users, eq(schema.users.id, schema.projectAdvisors.userId))
         .where(and(eq(schema.projectAdvisors.projectId, projectId), isNull(schema.projectAdvisors.deletedAt)))
 
-      // Kural 14: Audit log
+      // Audit log
       await transaction.insert(schema.auditLogs).values({
         id: randomUUID(),
         actorUserId: actor.id,
@@ -1400,6 +1265,7 @@ export class ProjectService {
       createdBy: schema.projects.createdBy,
       academicYearId: schema.projects.academicYearId,
       categoryId: schema.projects.categoryId,
+      projectType: schema.projects.projectType,
       participationType: schema.projects.participationType,
       teamName: schema.projects.teamName,
       deletedAt: schema.projects.deletedAt,
@@ -1411,9 +1277,28 @@ export class ProjectService {
     return rows[0]
   }
 
-  private validateParticipation(type: schema.ParticipationType, enrollmentIds: string[]) {
-    if (type === 'INDIVIDUAL' && enrollmentIds.length !== 1) throw new ProjectRuleError('Bireysel projede tam olarak bir öğrenci olmalıdır.')
-    if (type === 'TEAM' && enrollmentIds.length < 2) throw new ProjectRuleError('Takım projesinde en az iki öğrenci olmalıdır.')
+  private validateParticipation(
+    type: schema.ParticipationType,
+    enrollmentIds: string[],
+    projectType: schema.ProjectType = 'STUDENT',
+  ) {
+    if (projectType === 'STUDENT') {
+      if (type === 'INDIVIDUAL' && enrollmentIds.length !== 1) {
+        throw new ProjectRuleError('Bireysel projede tam olarak bir öğrenci olmalıdır.')
+      }
+      if (type === 'TEAM' && enrollmentIds.length < 2) {
+        throw new ProjectRuleError('Takım projesinde en az iki öğrenci olmalıdır.')
+      }
+    } else {
+      if (enrollmentIds.length > 0) {
+        if (type === 'INDIVIDUAL' && enrollmentIds.length !== 1) {
+          throw new ProjectRuleError('Bireysel projede en fazla bir öğrenci seçilebilir.')
+        }
+        if (type === 'TEAM' && enrollmentIds.length < 2) {
+          throw new ProjectRuleError('Takım projesine en az iki öğrenci seçilmelidir.')
+        }
+      }
+    }
   }
 
   private buildConflictMessage(conflicts: ProjectConflict[]) {

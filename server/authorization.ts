@@ -15,8 +15,19 @@ export function canManageAllRecords(user: AuthenticatedUser): boolean {
   return user.isActive && user.role === 'ADMIN'
 }
 
-export function canCreateProject(user: AuthenticatedUser): boolean {
-  return user.isActive && (user.role === 'ADMIN' || user.role === 'TEACHER')
+export function canCreateProject(user: AuthenticatedUser, projectType?: string): boolean {
+  if (!user || !user.isActive) return false
+  if (projectType === 'INSTITUTION') return user.role === 'ADMIN'
+  return user.role === 'ADMIN' || user.role === 'TEACHER'
+}
+
+export function assertCanCreateProject(user: AuthenticatedUser, projectType?: string): void {
+  if (!canCreateProject(user, projectType)) {
+    if (projectType === 'INSTITUTION' && user.role !== 'ADMIN') {
+      throw new AuthorizationError('Kurum projelerini yalnızca yöneticiler oluşturabilir.', 403)
+    }
+    throw new AuthorizationError('Proje oluşturma yetkiniz bulunmamaktadır.', 403)
+  }
 }
 
 export function canViewStudents(user: AuthenticatedUser): boolean {

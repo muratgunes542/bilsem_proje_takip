@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `project_type` text DEFAULT 'STUDENT' NOT NULL;

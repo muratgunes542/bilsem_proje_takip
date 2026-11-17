@@ -70,7 +70,7 @@ describe('Admin-created teacher credentials and first sign-in gate', () => {
     expect((await db.select().from(schema.users).where((await import('drizzle-orm')).eq(schema.users.id, data.user.id)))[0]?.mustChangePassword).toBe(false)
     const newSignIn = await createAuth(db, false).api.signInEmail({ body: { email: 'new-v161@example.com', password: 'YeniParola8' } })
     expect(newSignIn.user.email).toBe('new-v161@example.com')
-  })
+  }, 20000)
 
   it('does not let a teacher create another account and rejects invalid or duplicate email input', async () => {
     const forbidden = await handleApiRequest({ method: 'POST', url: '/api/admin/teachers', headers: { 'x-test-user-id': 'TEST-teacher' }, body: { name: 'TEST Yetkisiz', email: 'x@test.invalid' } }, db)

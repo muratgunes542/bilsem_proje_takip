@@ -216,7 +216,7 @@ export async function updateProjectAdvisors(
   projectId: string,
   input: { addUserIds?: string[]; removeUserIds?: string[] },
 ) {
-  return apiRequest<{ projectId: string; advisors: Array<{ userId: string; name: string; email: string; isPrimary: boolean }> }>(
+  return apiRequest<{ projectId: string; advisors: Array<{ userId: string; name: string; email: string; isPrimary: boolean; source?: 'EXPLICIT' | 'ENROLLMENT' }> }>(
     `/api/projects/${projectId}/advisors`,
     { method: 'PATCH', body: JSON.stringify(input) },
   )

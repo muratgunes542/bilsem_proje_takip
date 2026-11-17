@@ -106,15 +106,21 @@ export async function getAuthenticatedApiUser(
         .where(eq(schema.sessions.id, session.session.id))
     }
 
-    // Determine if request is interactive vs background
+    // Determine if request is interactive vs background with robust URL pathname normalization
     let requestUrl = ''
     if ('url' in req && typeof req.url === 'string') {
       requestUrl = req.url
     }
 
     const isInteractive = (() => {
-      const path = requestUrl.split('?')[0] ?? ''
-      if (path === '/api/notifications' || path.startsWith('/api/notifications/')) return false
+      try {
+        const parsed = new URL(requestUrl, 'http://localhost')
+        const path = parsed.pathname
+        if (path === '/api/notifications' || path.startsWith('/api/notifications/')) return false
+      } catch {
+        const path = requestUrl.split('?')[0] ?? ''
+        if (path === '/api/notifications' || path.startsWith('/api/notifications/')) return false
+      }
       return true
     })()
 

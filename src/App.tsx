@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, FileSpreadsheet, FolderKanban, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, Search, Settings, Shield, Sparkles, Upload, Users, X } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, FileSpreadsheet, FolderKanban, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, Search, Settings, Shield, Sparkles, Upload, Users, X } from 'lucide-react'
 import { z } from 'zod'
 import { apiRequest, apiPageRequest, ApiError, signOut, updateProjectAdvisors, type AcademicYear, type ApiPage, type DashboardSummary, type Project, type ProjectOptions, type Role, type Student, type StudentProfile as StudentProfileData, type StudentProject, type UserProfile } from './lib/api'
 import { AuthScreen } from './components/AuthScreen'
@@ -142,12 +142,12 @@ function Students({ refreshKey, onOpen, user }: { refreshKey: number; onOpen: (i
       <label className="student-filter-search"><span className="sr-only">Öğrenci ara</span><Search size={17} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Ad soyad veya BİLSEM numarası" /></label>
       <label className="student-filter-field"><span>Akademik yıl</span><select aria-label="Akademik yıl" value={yearId} onChange={(event) => { setYearId(event.target.value); setPage(1) }}><option value="">Tüm akademik yıllar</option>{years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}</select></label>
       <label className="student-filter-field"><span>Yetenek alanı</span><input value={talentArea} onChange={(event) => setTalentArea(event.target.value)} placeholder="Örn. Müzik" /></label>
-      <label className="student-filter-field"><span>Danışman öğretmen</span><input value={advisorName} onChange={(event) => setAdvisorName(event.target.value)} placeholder="Öğretmen adı" /></label>
+      <label className="student-filter-field"><span>Sınıf danışmanı</span><input value={advisorName} onChange={(event) => setAdvisorName(event.target.value)} placeholder="Öğretmen adı" /></label>
       <div className="student-filter-actions"><button className="button button-primary" type="submit">Filtrele</button><button className="button button-secondary" type="button" onClick={clearFilters}>Temizle</button></div>
     </form>
     {error ? <ErrorState error={error} retry={load} /> : loading ? <LoadingState /> : students.length ? <>
-      <div className="panel table-panel students-desktop-list"><div className="table-wrap"><table><thead><tr><th>ÖĞRENCİ</th><th>BİLSEM NO</th><th>YETENEK ALANI</th><th>DANIŞMAN</th><th>OKUL / SINIF</th><th /></tr></thead><tbody>{students.map((student) => <tr key={student.enrollmentId} onClick={() => onOpen(student.studentId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(student.studentId) }} tabIndex={0} className="click-row"><td><div className="student-cell"><div className="student-avatar">{student.firstName.slice(0, 1)}{student.lastName.slice(0, 1)}</div><span><b>{personName(student.firstName, student.lastName)}</b><small>{student.className ? `${student.gradeLevel ?? ''}. sınıf · ${student.className}` : student.gradeLevel ? `${student.gradeLevel}. sınıf` : 'Öğrenci profili'}</small></span></div></td><td className="mono">{student.bilsemNo}</td><td><span className="badge badge-blue">{student.talentArea ?? '—'}</span></td><td>{student.advisorName ?? '—'}</td><td>{student.schoolName ?? '—'}</td><td><ChevronRight size={16} className="muted-icon" /></td></tr>)}</tbody></table></div></div>
-      <div className="student-mobile-list">{students.map((student) => <button className="panel student-mobile-card" key={student.enrollmentId} onClick={() => onOpen(student.studentId)}><span className="student-avatar">{student.firstName.slice(0, 1)}{student.lastName.slice(0, 1)}</span><span className="student-mobile-main"><b>{personName(student.firstName, student.lastName)}</b><small className="mono">{student.bilsemNo}</small><span><strong>Yetenek alanı</strong>{student.talentArea ?? '—'}</span><span><strong>Danışman</strong>{student.advisorName ?? '—'}</span></span><ChevronRight size={17} className="muted-icon" /></button>)}</div>
+      <div className="panel table-panel students-desktop-list"><div className="table-wrap"><table><thead><tr><th>ÖĞRENCİ</th><th>BİLSEM NO</th><th>YETENEK ALANI</th><th>SINIF DANIŞMANI</th><th>OKUL / SINIF</th><th /></tr></thead><tbody>{students.map((student) => <tr key={student.enrollmentId} onClick={() => onOpen(student.studentId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(student.studentId) }} tabIndex={0} className="click-row"><td><div className="student-cell"><div className="student-avatar">{student.firstName.slice(0, 1)}{student.lastName.slice(0, 1)}</div><span><b>{personName(student.firstName, student.lastName)}</b><small>{student.className ? `${student.gradeLevel ?? ''}. sınıf · ${student.className}` : student.gradeLevel ? `${student.gradeLevel}. sınıf` : 'Öğrenci profili'}</small></span></div></td><td className="mono">{student.bilsemNo}</td><td><span className="badge badge-blue">{student.talentArea ?? '—'}</span></td><td>{student.advisorName ?? '—'}</td><td>{student.schoolName ?? '—'}</td><td><ChevronRight size={16} className="muted-icon" /></td></tr>)}</tbody></table></div></div>
+      <div className="student-mobile-list">{students.map((student) => <button className="panel student-mobile-card" key={student.enrollmentId} onClick={() => onOpen(student.studentId)}><span className="student-avatar">{student.firstName.slice(0, 1)}{student.lastName.slice(0, 1)}</span><span className="student-mobile-main"><b>{personName(student.firstName, student.lastName)}</b><small className="mono">{student.bilsemNo}</small><span><strong>Yetenek alanı</strong>{student.talentArea ?? '—'}</span><span><strong>Sınıf Danışmanı</strong>{student.advisorName ?? '—'}</span></span><ChevronRight size={17} className="muted-icon" /></button>)}</div>
       <Pagination page={page} pagination={pagination} setPage={setPage} />
     </> : <div className="panel"><EmptyState title="Öğrenci kaydı bulunamadı" message={term || appliedTalentArea || appliedAdvisorName ? 'Arama veya filtre ölçütlerinizi değiştirip yeniden deneyin.' : yearId ? 'Seçili akademik yıl için henüz öğrenci aktarılmamış.' : 'Henüz öğrenci kaydı bulunmuyor.'} action={(term || appliedTalentArea || appliedAdvisorName || yearId) ? <button className="button button-secondary" onClick={clearFilters}>Filtreleri temizle</button> : undefined} /></div>}
   </>
@@ -190,11 +190,11 @@ function StudentProfile({ studentId, onBack, user }: { studentId: string; onBack
     <section className="student-summary-grid" aria-label="Güncel öğrenci bilgileri">
       <article className="panel student-summary-item"><small>GÜNCEL AKADEMİK YIL</small><b>{current?.academicYearName ?? 'Güncel yıl kaydı yok'}</b></article>
       <article className="panel student-summary-item"><small>YETENEK ALANI</small><b>{current?.talentArea ?? '—'}</b></article>
-      <article className="panel student-summary-item"><small>DANIŞMAN ÖĞRETMEN</small><b>{current?.advisorName ?? '—'}</b></article>
+      <article className="panel student-summary-item"><small>SINIF DANIŞMANI</small><b>{current?.advisorName ?? '—'}</b></article>
       <article className="panel student-summary-item"><small>SİSTEME KAYIT</small><b>{dateLabel(student.createdAt)}</b></article>
     </section>
-    <section className="panel profile-years-panel"><div className="panel-heading"><div><h3>Akademik yıl kayıtları</h3><p>Yıllara göre okul ve danışman bilgileri</p></div></div>{profile.enrollments.length ? <div className="enrollment-list">{profile.enrollments.map((enrollment) => <article key={enrollment.enrollmentId} className="enrollment-card"><div className="enrollment-year"><CalendarDays size={17} /><b>{enrollment.academicYearName}</b>{enrollment.isCurrentAcademicYear && <span className="badge badge-green">Güncel</span>}</div><span><small>YETENEK ALANI</small>{enrollment.talentArea ?? '—'}</span><span><small>DANIŞMAN</small>{enrollment.advisorName ?? '—'}</span><span><small>OKUL / SINIF</small>{enrollment.schoolName ?? '—'}{enrollment.gradeLevel ? ` · ${enrollment.gradeLevel}. sınıf ${enrollment.className ?? ''}` : ''}</span></article>)}</div> : <EmptyState title="Akademik kayıt yok" message="Bu öğrenci için henüz akademik yıl kaydı bulunmuyor." />}</section>
-    <section className="panel profile-projects-panel"><div className="panel-heading"><div><h3>Proje geçmişi</h3><p>Tüm akademik yıllardaki bireysel ve takım projeleri</p></div><span className="heading-count"><b>{history.length}</b><span>proje</span></span></div>{history.length ? <div className="project-history-years">{Object.entries(projectsByYear).map(([academicYear, projects]) => <section className="project-history-year" key={academicYear}><div className="project-history-year-title"><CalendarDays size={16} /><h4>{academicYear}</h4><span>{projects.length} proje</span></div><div className="project-history-list">{projects.map((project) => <article className="project-history-card" key={project.projectId}><div className="project-mark"><FolderKanban size={17} /></div><div className="project-history-main"><div className="project-history-label">{project.category}</div><h4>{project.title}</h4><div className="project-history-meta"><span><small>DURUM</small><b>{project.status}</b></span><span><small>KATILIM</small><b>{project.participationType === 'TEAM' ? `Takım${project.teamName ? ` · ${project.teamName}` : ''}` : 'Bireysel'}</b></span><span><small>DANIŞMAN</small><b>{project.advisors.length ? project.advisors.map((advisor) => advisor.name).join(', ') : 'Atanmamış'}</b></span></div></div></article>)}</div></section>)}</div> : <EmptyState title="Proje geçmişi bulunmuyor" message="Öğrencinin tüm yıllardaki projeleri burada listelenir. Takım projeleri her katılımcının profilinde görünür." />}</section>
+    <section className="panel profile-years-panel"><div className="panel-heading"><div><h3>Akademik yıl kayıtları</h3><p>Yıllara göre okul ve danışman bilgileri</p></div></div>{profile.enrollments.length ? <div className="enrollment-list">{profile.enrollments.map((enrollment) => <article key={enrollment.enrollmentId} className="enrollment-card"><div className="enrollment-year"><CalendarDays size={17} /><b>{enrollment.academicYearName}</b>{enrollment.isCurrentAcademicYear && <span className="badge badge-green">Güncel</span>}</div><span><small>YETENEK ALANI</small>{enrollment.talentArea ?? '—'}</span><span><small>SINIF DANIŞMANI</small>{enrollment.advisorName ?? '—'}</span><span><small>OKUL / SINIF</small>{enrollment.schoolName ?? '—'}{enrollment.gradeLevel ? ` · ${enrollment.gradeLevel}. sınıf ${enrollment.className ?? ''}` : ''}</span></article>)}</div> : <EmptyState title="Akademik kayıt yok" message="Bu öğrenci için henüz akademik yıl kaydı bulunmuyor." />}</section>
+    <section className="panel profile-projects-panel"><div className="panel-heading"><div><h3>Proje geçmişi</h3><p>Tüm akademik yıllardaki bireysel ve takım projeleri</p></div><span className="heading-count"><b>{history.length}</b><span>proje</span></span></div>{history.length ? <div className="project-history-years">{Object.entries(projectsByYear).map(([academicYear, projects]) => <section className="project-history-year" key={academicYear}><div className="project-history-year-title"><CalendarDays size={16} /><h4>{academicYear}</h4><span>{projects.length} proje</span></div><div className="project-history-list">{projects.map((project) => <article className="project-history-card" key={project.projectId}><div className="project-mark"><FolderKanban size={17} /></div><div className="project-history-main"><div className="project-history-label">{project.category}</div><h4>{project.title}</h4><div className="project-history-meta"><span><small>DURUM</small><b>{project.status}</b></span><span><small>KATILIM</small><b>{project.participationType === 'TEAM' ? `Takım${project.teamName ? ` · ${project.teamName}` : ''}` : 'Bireysel'}</b></span><span><small>PROJE DANIŞMANLARI</small><b>{project.advisors.length ? project.advisors.map((advisor) => advisor.name).join(', ') : 'Atanmamış'}</b></span></div></div></article>)}</div></section>)}</div> : <EmptyState title="Proje geçmişi bulunmuyor" message="Öğrencinin tüm yıllardaki projeleri burada listelenir. Takım projeleri her katılımcının profilinde görünür." />}</section>
   </>
 }
 
@@ -453,13 +453,239 @@ function ProjectDetail({ projectId, user, onBack, notify, refresh }: { projectId
   return <><button className="text-button project-back" onClick={onBack}><ChevronLeft size={15} /> Projelere dön</button><PageHeading eyebrow="PROJE AYRINTISI" title={p.title} description={`${p.categoryName} · ${p.academicYearName}`} action={<span className="badge badge-neutral">{p.statusName}</span>} />{p.deletedAt && <div className="info-note project-archived-note"><b>Bu proje arşivlenmiş.</b><p>Normal proje listesinde görünmez ve düzenlemeye kapalıdır.</p></div>}<div className="project-detail-layout"><section className="panel project-detail-main"><div className="panel-heading"><div><h3>Proje bilgileri</h3><p>{p.participationType === 'TEAM' ? `Takım projesi${p.teamName ? ` · ${p.teamName}` : ''}` : 'Bireysel proje'}</p></div>{canEdit && <button className="button button-secondary" onClick={() => setEditing(!editing)}>{editing ? 'Düzenlemeyi kapat' : 'Düzenle'}</button>}</div>{editing && canEdit ? <form className="project-edit-form" onSubmit={(e) => void save(e)}><label className="field-label">Proje adı<input className="text-input" maxLength={200} required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label><label className="field-label">Açıklama<textarea className="text-input" rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><div className="form-two-col"><label className="field-label">Durum<select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>{options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{p.participationType === 'TEAM' && <label className="field-label">Takım adı<input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} /></label>}</div><button className="button button-primary" disabled={busy}>Değişiklikleri kaydet</button></form> : <div className="project-info-grid"><div><small>AÇIKLAMA</small><p>{p.description || 'Açıklama eklenmemiş.'}</p></div><div><small>AKADEMİK YIL</small><b>{p.academicYearName}</b></div><div><small>KATEGORİ</small><b>{p.categoryName}</b></div><div><small>DURUM</small><b>{p.statusName}</b></div><div><small>KATILIM</small><b>{p.participationType === 'TEAM' ? `Takım${p.teamName ? ` · ${p.teamName}` : ''}` : 'Bireysel'}</b></div><div><small>OLUŞTURAN ÖĞRETMEN</small><b>{p.creatorName}</b></div><div><small>DANIŞMAN ÖĞRETMENLER</small><b>{detail.advisors.length ? detail.advisors.map((a) => a.name).join(', ') : 'Danışman atanmamış'}</b></div></div>}<div className="project-members"><div className="panel-heading" style={{ padding: 0, marginBottom: 10 }}><h3>İlgili öğrenciler <span>{detail.students.length}</span></h3>{canEdit && p.participationType === 'TEAM' && <button className="button button-secondary button-small" disabled={busy} onClick={() => void openAddStudentModal()}>+ Öğrenci ekle</button>}</div>{detail.students.map((s) => <div className="project-member" key={s.enrollmentId}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0 }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo}{s.className ? ` · ${s.className}` : ''}</small></div>{canEdit && p.participationType === 'TEAM' && detail.students.length > 2 && <button className="icon-button" title="Öğrenciyi çıkar" disabled={busy} onClick={() => void removeMember(s.enrollmentId)}><X size={15} /></button>}</div>)}</div></section><aside className="panel project-actions"><h3>Proje işlemleri</h3><p>{p.createdBy === user.id ? 'Bu projeyi siz oluşturdunuz.' : 'Oluşturan öğretmen: ' + p.creatorName}</p>{user.role === 'ADMIN' && !p.deletedAt && <button className="button button-secondary" disabled={busy} onClick={() => void openAdvisorModal()}>Danışmanları Düzenle</button>}{canEdit && !p.deletedAt && p.participationType === 'INDIVIDUAL' && <button className="button button-primary" disabled={busy} onClick={openConvertToTeamModal}>Takım Projesine Dönüştür</button>}{canEdit && !p.deletedAt && p.participationType === 'TEAM' && <button className="button button-secondary" disabled={busy} onClick={openConvertToIndividualModal}>Bireysel Projeye Dönüştür</button>}{canArchive && <button className="button button-secondary" disabled={busy} onClick={() => void archive()}>Projeyi arşivle</button>}{p.deletedAt && user.role === 'ADMIN' && <button className="button button-primary" disabled={busy} onClick={() => void restore()}>Arşivden geri yükle</button>}{canDelete && <button className="button button-danger" disabled={busy} onClick={() => setShowDeleteModal(true)}>Projeyi sil</button>}{!canEdit && !p.deletedAt && <small>Düzenleme yalnızca projeyi oluşturan öğretmen ve yöneticiler tarafından yapılabilir.</small>}</aside></div>{showDeleteModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Projeyi Kalıcı Olarak Sil</h3><p><b>{p.title}</b> adlı projeyi kalıcı olarak silmek istediğinize emin misiniz?</p>{detail.students.length > 0 && <div className="modal-members-note"><small>Projedeki katılımcı öğrenciler:</small><span>{detail.students.map((s) => `${s.firstName} ${s.lastName}`).join(', ')}</span></div>}<p className="modal-warning">Bu işlem geri alınamaz ve projedeki tüm takım/öğrenci ilişkileri kaldırılır.</p><div className="modal-actions"><button className="button button-secondary" disabled={busy} onClick={() => setShowDeleteModal(false)}>İptal</button><button className="button button-danger" disabled={busy} onClick={() => void deleteProject()}>{busy ? 'Siliniyor…' : 'Evet, kalıcı olarak sil'}</button></div></div></div>}{showAddStudentModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Projeye Öğrenci Ekle</h3><p><b>{p.title}</b> projesine katılacak öğrenciyi seçin.</p><div className="search-wrap student-picker-search"><Search size={16} /><input value={studentSearch} onChange={(e) => { setStudentSearch(e.target.value); setStudentSearchPage(1); }} placeholder="İsim veya BİLSEM no ile ara" /></div><div className="student-picker modal-student-picker">{availableStudents.length ? availableStudents.map((s) => <button type="button" className="student-option modal-student-option" key={s.enrollmentId} disabled={busy} onClick={() => void addMember(s.enrollmentId)}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></div><span className="button button-secondary button-small">Ekle</span></button>) : <div className="mini-empty">Eklenebilecek uygun öğrenci bulunamadı.</div>}</div>{studentSearchTotalPages > 1 && <div className="pagination" style={{ padding: '8px 0' }}><button type="button" className="button button-secondary button-small" disabled={studentSearchPage <= 1} onClick={() => setStudentSearchPage((page) => Math.max(1, page - 1))}>Önceki</button><span><b>{studentSearchPage}</b> / {studentSearchTotalPages}</span><button type="button" className="button button-secondary button-small" disabled={studentSearchPage >= studentSearchTotalPages} onClick={() => setStudentSearchPage((page) => Math.min(studentSearchTotalPages, page + 1))}>Sonraki</button></div>}<div className="modal-actions" style={{ marginTop: '15px' }}><button type="button" className="button button-secondary" onClick={() => setShowAddStudentModal(false)}>Kapat</button></div></div></div>}{showConvertToTeamModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Takım Projesine Dönüştür</h3><p><b>{p.title}</b> projesini takım çalışmasına dönüştürmek için ek öğrenci ve isteğe bağlı takım adı girin.</p><label className="field-label" style={{ marginTop: 10 }}>Takım adı (isteğe bağlı)<input className="text-input" value={convertTeamName} onChange={(e) => setConvertTeamName(e.target.value)} placeholder="Örn: Genç Araştırmacılar" /></label><div className="search-wrap student-picker-search" style={{ marginTop: 10 }}><Search size={16} /><input value={convertModalSearch} onChange={(e) => { setConvertModalSearch(e.target.value); setConvertModalPage(1); }} placeholder="Ek öğrenci ara" /></div><div className="student-picker modal-student-picker">{convertAvailableStudents.length ? convertAvailableStudents.map((s) => { const isSelected = convertAdditionalIds.includes(s.enrollmentId); return <button type="button" className={`student-option modal-student-option ${isSelected ? 'selected' : ''}`} key={s.enrollmentId} onClick={() => { setConvertAdditionalIds(isSelected ? convertAdditionalIds.filter((id) => id !== s.enrollmentId) : [...convertAdditionalIds, s.enrollmentId]); }}><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></div><span className={`button button-small ${isSelected ? 'button-primary' : 'button-secondary'}`}>{isSelected ? 'Seçildi' : 'Seç'}</span></button> }) : <div className="mini-empty">Eklenebilecek ek öğrenci bulunamadı.</div>}</div>{convertSearchTotalPages > 1 && <div className="pagination" style={{ padding: '8px 0' }}><button type="button" className="button button-secondary button-small" disabled={convertModalPage <= 1} onClick={() => setConvertModalPage((page) => Math.max(1, page - 1))}>Önceki</button><span><b>{convertModalPage}</b> / {convertSearchTotalPages}</span><button type="button" className="button button-secondary button-small" disabled={convertModalPage >= convertSearchTotalPages} onClick={() => setConvertModalPage((page) => Math.min(convertSearchTotalPages, page + 1))}>Sonraki</button></div>}<div className="modal-actions" style={{ marginTop: 15 }}><button type="button" className="button button-secondary" disabled={busy} onClick={() => setShowConvertToTeamModal(false)}>İptal</button><button type="button" className="button button-primary" disabled={busy || convertAdditionalIds.length === 0} onClick={() => void convertToTeam()}>{busy ? 'Dönüştürülüyor…' : 'Takım Projesine Dönüştür'}</button></div></div></div>}{showConvertToIndividualModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Bireysel Projeye Dönüştür</h3><p><b>{p.title}</b> projesinde kalacak tek öğrenciyi seçin. Çıkarılan öğrencilerin proje bağlantısı kaldırılacaktır.</p><div className="student-picker modal-student-picker" style={{ marginTop: 10 }}>{detail.students.map((s) => { const isSelected = selectedIndividualEnrollmentId === s.enrollmentId; return <button type="button" key={s.enrollmentId} className={`student-option modal-student-option ${isSelected ? 'selected' : ''}`} style={{ cursor: 'pointer', textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '10px' }} onClick={() => setSelectedIndividualEnrollmentId(s.enrollmentId)}><input type="radio" name="individualStudent" checked={isSelected} onChange={() => setSelectedIndividualEnrollmentId(s.enrollmentId)} /><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><div style={{ flex: 1, minWidth: 0 }}><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo}</small></div><span className={`check-box ${isSelected ? 'check-box-active' : ''}`} style={{ opacity: isSelected ? 1 : 0.4 }}><Check size={14} /></span></button> })}</div>{(() => { const selectedStudent = detail.students.find((s) => s.enrollmentId === selectedIndividualEnrollmentId); return selectedStudent ? <div className="selected-student-summary" style={{ marginTop: 12, padding: '8px 12px', background: '#e0f2fe', borderRadius: '6px', fontSize: '13px', color: '#0369a1' }}><b>Projede kalacak öğrenci:</b> {personName(selectedStudent.firstName, selectedStudent.lastName)}</div> : null })()}<div className="modal-actions" style={{ marginTop: 15 }}><button type="button" className="button button-secondary" disabled={busy} onClick={() => setShowConvertToIndividualModal(false)}>İptal</button><button type="button" className="button button-primary" disabled={busy || !selectedIndividualEnrollmentId} onClick={() => void convertToIndividual()}>{busy ? 'Dönüştürülüyor…' : 'Bireysel Projeye Dönüştür'}</button></div></div></div>}{showAdvisorModal && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><h3>Danışmanları Düzenle</h3><p>Mevcut danışmanları çıkarın veya yeni danışman ekleyin. En az bir aktif danışman bulunmalıdır.</p><div style={{marginBottom:'10px'}}><b>Mevcut Danışmanlar</b>{detail.advisors.map((a) => { const isLegacy = a.userId.startsWith('legacy:'); return <div key={a.userId} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',borderBottom:'1px solid #e2e8f0'}}><span style={{flex:1}}>{a.name}{a.isPrimary ? ' ★' : ''}</span>{isLegacy ? <small style={{color:'#64748b',fontSize:'12px'}}>Eski kayıt – yönetilebilir kullanıcı hesabı değil</small> : !advisorRemoveIds.includes(a.userId) ? <button type="button" className="button button-secondary button-small" onClick={() => setAdvisorRemoveIds([...advisorRemoveIds, a.userId])}>Çıkar</button> : <button type="button" className="button button-primary button-small" onClick={() => setAdvisorRemoveIds(advisorRemoveIds.filter(id => id !== a.userId))}>Geri Al</button>}</div> })}</div>{options?.teachers && options.teachers.length > 0 && <div style={{marginBottom:'10px'}}><b>Yeni Danışman Ekle</b><div className="student-picker" style={{maxHeight:'150px',marginTop:'6px'}}>{options.teachers.filter(t => !detail.advisors.some(a => a.userId === t.id)).map(t => <label key={t.id} className="student-option"><input type="checkbox" checked={advisorAddIds.includes(t.id)} onChange={(e) => setAdvisorAddIds(e.target.checked ? [...advisorAddIds, t.id] : advisorAddIds.filter(id => id !== t.id))} /><span className="student-avatar">{t.name.slice(0,1)}</span><span><b>{t.name}</b></span><span className="check-box"><Check size={14} /></span></label>)}</div></div>}{advisorError && <div className="form-error" role="alert">{advisorError}</div>}<div className="modal-actions"><button type="button" className="button button-secondary" disabled={advisorBusy} onClick={() => setShowAdvisorModal(false)}>İptal</button><button type="button" className="button button-primary" disabled={advisorBusy} onClick={() => void saveAdvisors()}>{advisorBusy ? 'Kaydediliyor…' : 'Kaydet'}</button></div></div></div>}</>
 }
 
-function ProjectCreate({ user, onCreated }: { user: UserProfile; onCreated: (projectId: string, warning?: string) => void }) { const [years, setYears] = useState<AcademicYear[]>([]); const [options, setOptions] = useState<ProjectOptions | null>(null); const [students, setStudents] = useState<Student[]>([]); const [studentsTotal, setStudentsTotal] = useState(0); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(''); const [selected, setSelected] = useState<string[]>([]); const [selectedAdvisors, setSelectedAdvisors] = useState<string[]>([]); const [error, setError] = useState(''); const [form, setForm] = useState({ title: '', description: '', academicYearId: '', categoryId: '', statusId: '', participationType: 'INDIVIDUAL' as 'INDIVIDUAL' | 'TEAM', teamName: '' });
-  useEffect(() => { Promise.all([apiRequest<AcademicYear[]>('/api/academic-years'), apiRequest<ProjectOptions>('/api/project-options')]).then(([y, o]) => { setYears(y); setOptions(o); const active = y.find((a) => a.isCurrent) ?? y[0]; setForm((f) => ({ ...f, academicYearId: active?.id ?? '', categoryId: o.categories[0]?.id ?? '', statusId: o.statuses[0]?.id ?? '' })) }).catch((e) => setError(e instanceof Error ? e.message : 'Form bilgileri alınamadı.')).finally(() => setLoading(false)) }, [])
-  useEffect(() => { const q = new URLSearchParams({ page: '1', pageSize: '100' }); if (form.academicYearId) q.set('academicYearId', form.academicYearId); if (search.trim()) q.set('search', search.trim()); fetch('/api/students?' + q, { credentials: 'include' }).then(async (r) => { const j = await r.json(); if (r.ok && j.success) { setStudents(j.data); setStudentsTotal(j.pagination.total) } }).catch(() => {}) }, [form.academicYearId, search])
-  const schema = z.object({ title: z.string().trim().min(1, 'Proje başlığı zorunludur.').max(200), description: z.string().max(10000), academicYearId: z.string().min(1, 'Akademik yıl seçin.'), categoryId: z.string().min(1, 'Proje kategorisi seçin.'), statusId: z.string().min(1, 'Proje durumu seçin.'), participationType: z.enum(['INDIVIDUAL', 'TEAM']), teamName: z.string(), enrollmentIds: z.array(z.string()).min(1, 'En az bir öğrenci seçin.') })
-  async function submit(event: FormEvent) { event.preventDefault(); setError(''); const parsed = schema.safeParse({ ...form, enrollmentIds: selected }); if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Form bilgilerini kontrol edin.'); return }; if (form.participationType === 'INDIVIDUAL' && selected.length !== 1) { setError('Bireysel projede yalnızca bir öğrenci seçin.'); return }; if (form.participationType === 'TEAM' && selected.length < 2) { setError('Takım projesi için en az iki öğrenci seçin.'); return }; if (form.participationType === 'TEAM' && !form.teamName.trim()) { setError('Takım çalışması için takım adı girin.'); return } setBusy(true); try { const body: Record<string, unknown> = { ...form, title: form.title.trim(), description: form.description.trim() || null, teamName: form.participationType === 'TEAM' ? form.teamName.trim() : null, enrollmentIds: selected }; if (user.role === 'ADMIN') { body.advisorUserIds = selectedAdvisors }; const result = await apiRequest<{ projectId: string; conflicts: Array<{ enrollmentId: string; message: string }> }>('/api/projects', { method: 'POST', body: JSON.stringify(body) }); onCreated(result.projectId, result.conflicts.length ? `${result.conflicts.length} öğrenci için mükerrerlik uyarısı var.` : undefined) } catch (e) { setError(e instanceof Error ? e.message : 'Proje kaydedilemedi.') } finally { setBusy(false) } }
-  if (loading) return <><PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Öğrenci çalışması için yeni proje kaydı hazırlayın." /><LoadingState /></>
-  return <><PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Öğrenci çalışması için yeni proje kaydı hazırlayın." /><form className="create-project-layout" onSubmit={submit}><div className="form-column"><section className="panel form-panel"><div className="form-section-title"><span>01</span><div><h3>Proje bilgileri</h3><p>Çalışmanın temel bilgilerini girin.</p></div></div><label className="field-label">Proje başlığı <span className="required">*</span><input className="text-input" maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Örn. Doğal yaşamı gözlemliyoruz" /></label><label className="field-label">Proje açıklaması<textarea className="text-input" rows={4} maxLength={10000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Projenin amacı ve kısa içeriği" /></label><div className="form-two-col"><label className="field-label">Akademik yıl <span className="required">*</span><select className="text-input" value={form.academicYearId} onChange={(e) => setForm({ ...form, academicYearId: e.target.value })}><option value="">Seçin</option>{years.map((y) => <option key={y.id} value={y.id}>{y.name}{y.isCurrent ? ' · Güncel' : ''}</option>)}</select></label><label className="field-label">Proje kategorisi <span className="required">*</span><select className="text-input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Seçin</option>{options?.categories.map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}</select></label></div><div className="form-two-col"><label className="field-label">Proje durumu<select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>{options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label className="field-label">Katılım türü<select className="text-input" value={form.participationType} onChange={(e) => setForm({ ...form, participationType: e.target.value as 'INDIVIDUAL' | 'TEAM' })}><option value="INDIVIDUAL">Bireysel</option><option value="TEAM">Takım</option></select></label></div>{form.participationType === 'TEAM' && <label className="field-label">Takım adı <span className="required">*</span><input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} placeholder="Takım adı" /></label>}{user.role === 'ADMIN' && options?.teachers && options.teachers.length > 0 && <div className="form-two-col"><label className="field-label" style={{ gridColumn: '1 / -1' }}>Danışman öğretmenler (Yönetici seçimi)<small style={{ display: 'block', color: '#64748b', marginTop: '2px', fontWeight: 'normal' }}>Danışman seçmezseniz öğrencilerin ilgili akademik yıl danışmanları otomatik atanır. Danışmanı olmayan öğrenciler için projeyi oluşturan kişi varsayılan danışman olarak eklenir.</small><div className="student-picker" style={{ maxHeight: '160px', marginTop: '6px' }}>{options.teachers.map((t) => <label className="student-option" key={t.id}><input type="checkbox" checked={selectedAdvisors.includes(t.id)} onChange={(e) => setSelectedAdvisors(e.target.checked ? [...selectedAdvisors, t.id] : selectedAdvisors.filter((id) => id !== t.id))} /><span className="student-avatar">{t.name.slice(0, 1)}</span><span><b>{t.name}</b></span><span className="check-box"><Check size={14} /></span></label>)}</div></label></div>}</section><section className="panel form-panel"><div className="form-section-title"><span>02</span><div><h3>Öğrencileri seçin</h3><p>Projeye en az bir öğrenci ekleyin. {selected.length} öğrenci seçildi.</p></div></div><div className="search-wrap student-picker-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Öğrenci ara" /></div>{students.length ? <div className="student-picker">{students.map((s) => <label className="student-option" key={s.enrollmentId}><input type="checkbox" checked={selected.includes(s.enrollmentId)} onChange={(e) => setSelected(e.target.checked ? [...selected, s.enrollmentId] : selected.filter((id) => id !== s.enrollmentId))} /><span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span><span><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></span><span className="check-box"><Check size={14} /></span></label>)}</div> : <div className="mini-empty">{studentsTotal ? 'Bu aramayla eşleşen öğrenci bulunamadı.' : 'Seçilen akademik yılda öğrenci kaydı yok. Önce Excel aktarımıyla öğrenci ekleyin.'}</div>}</section></div><aside className="form-aside"><div className="panel submit-panel"><div className="submit-badge"><Sparkles size={20} /></div><h3>Projeyi kaydetmeye hazır mısınız?</h3><p>Proje ve öğrenci ilişkileri seçtiğiniz akademik yıl altında kaydedilir.</p>{error && <div className="form-error" role="alert">{error}</div>}<button className="button button-primary full-button" disabled={busy || loading}>{busy ? 'Kaydediliyor…' : 'Projeyi oluştur'} <ChevronRight size={16} /></button><span className="secure-note"><Shield size={14} /> Kayıt, kurum API’si üzerinden doğrulanır.</span></div><div className="info-note"><b><Activity size={16} /> Kayıt bilgisi</b><p>Başlık, açıklama, akademik yıl, kategori, durum ve öğrenciler proje kaydına eklenir.</p></div></aside></form></>
+function ProjectCreate({ user, onCreated }: { user: UserProfile; onCreated: (projectId: string, warning?: string) => void }) {
+  const [years, setYears] = useState<AcademicYear[]>([])
+  const [options, setOptions] = useState<ProjectOptions | null>(null)
+  const [students, setStudents] = useState<Student[]>([])
+  const [studentsTotal, setStudentsTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
+  const [selectedAdvisors, setSelectedAdvisors] = useState<string[]>([])
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    academicYearId: '',
+    categoryId: '',
+    statusId: '',
+    projectType: 'STUDENT' as 'STUDENT' | 'TEACHER' | 'INSTITUTION',
+    participationType: 'INDIVIDUAL' as 'INDIVIDUAL' | 'TEAM',
+    teamName: '',
+  })
+
+  useEffect(() => {
+    Promise.all([apiRequest<AcademicYear[]>('/api/academic-years'), apiRequest<ProjectOptions>('/api/project-options')])
+      .then(([y, o]) => {
+        setYears(y)
+        setOptions(o)
+        const active = y.find((a) => a.isCurrent) ?? y[0]
+        setForm((f) => ({ ...f, academicYearId: active?.id ?? '', categoryId: o.categories[0]?.id ?? '', statusId: o.statuses[0]?.id ?? '' }))
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Form bilgileri alınamadı.'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    const q = new URLSearchParams({ page: '1', pageSize: '100' })
+    if (form.academicYearId) q.set('academicYearId', form.academicYearId)
+    if (search.trim()) q.set('search', search.trim())
+    fetch('/api/students?' + q, { credentials: 'include' })
+      .then(async (r) => {
+        const j = await r.json()
+        if (r.ok && j.success) {
+          setStudents(j.data)
+          setStudentsTotal(j.pagination.total)
+        }
+      })
+      .catch(() => {})
+  }, [form.academicYearId, search])
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    if (form.projectType === 'STUDENT') {
+      if (selected.length === 0) {
+        setError('Öğrenci projelerinde en az bir öğrenci seçmelisiniz.')
+        return
+      }
+      if (form.participationType === 'INDIVIDUAL' && selected.length !== 1) {
+        setError('Bireysel projede yalnızca bir öğrenci seçin.')
+        return
+      }
+      if (form.participationType === 'TEAM' && selected.length < 2) {
+        setError('Takım projesi için en az iki öğrenci seçin.')
+        return
+      }
+    } else if (selected.length > 0) {
+      if (form.participationType === 'INDIVIDUAL' && selected.length !== 1) {
+        setError('Bireysel projede en fazla bir öğrenci seçin.')
+        return
+      }
+      if (form.participationType === 'TEAM' && selected.length < 2) {
+        setError('Takım projesinde en az iki öğrenci seçin.')
+        return
+      }
+    }
+    if (form.participationType === 'TEAM' && !form.teamName.trim()) {
+      setError('Takım çalışması için takım adı girin.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      const body: Record<string, unknown> = {
+        ...form,
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        teamName: form.participationType === 'TEAM' ? form.teamName.trim() : null,
+        enrollmentIds: selected,
+      }
+      if (user.role === 'ADMIN') {
+        body.advisorUserIds = selectedAdvisors
+      }
+      const result = await apiRequest<{ projectId: string; conflicts: Array<{ enrollmentId: string; message: string }> }>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      onCreated(result.projectId, result.conflicts.length ? `${result.conflicts.length} öğrenci için mükerrerlik uyarısı var.` : undefined)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Proje kaydedilemedi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (loading) return <><PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Yeni proje kaydı hazırlayın." /><LoadingState /></>
+
+  return (
+    <>
+      <PageHeading eyebrow="PROJE ÇALIŞMALARI" title="Proje Oluştur" description="Yeni proje kaydı hazırlayın." />
+      <form className="create-project-layout" onSubmit={submit}>
+        <div className="form-column">
+          <section className="panel form-panel">
+            <div className="form-section-title"><span>01</span><div><h3>Proje bilgileri</h3><p>Çalışmanın temel bilgilerini girin.</p></div></div>
+            <label className="field-label">Proje başlığı <span className="required">*</span>
+              <input className="text-input" maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Örn. Doğal yaşamı gözlemliyoruz" />
+            </label>
+            <label className="field-label">Proje açıklaması
+              <textarea className="text-input" rows={4} maxLength={10000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Projenin amacı ve kısa içeriği" />
+            </label>
+            <div className="form-two-col">
+              <label className="field-label">Proje türü <span className="required">*</span>
+                <select
+                  className="text-input"
+                  value={form.projectType}
+                  onChange={(e) => setForm({ ...form, projectType: e.target.value as 'STUDENT' | 'TEACHER' | 'INSTITUTION' })}
+                >
+                  <option value="STUDENT">Öğrenci Projesi</option>
+                  <option value="TEACHER">Öğretmen Projesi</option>
+                  {user.role === 'ADMIN' && <option value="INSTITUTION">Kurum Projesi</option>}
+                </select>
+              </label>
+              <label className="field-label">Akademik yıl <span className="required">*</span>
+                <select className="text-input" value={form.academicYearId} onChange={(e) => setForm({ ...form, academicYearId: e.target.value })}>
+                  <option value="">Seçin</option>
+                  {years.map((y) => <option key={y.id} value={y.id}>{y.name}{y.isCurrent ? ' · Güncel' : ''}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="form-two-col">
+              <label className="field-label">Proje kategorisi <span className="required">*</span>
+                <select className="text-input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+                  <option value="">Seçin</option>
+                  {options?.categories.map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}
+                </select>
+              </label>
+              <label className="field-label">Proje durumu
+                <select className="text-input" value={form.statusId} onChange={(e) => setForm({ ...form, statusId: e.target.value })}>
+                  {options?.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="form-two-col">
+              <label className="field-label">Katılım türü
+                <select className="text-input" value={form.participationType} onChange={(e) => setForm({ ...form, participationType: e.target.value as 'INDIVIDUAL' | 'TEAM' })}>
+                  <option value="INDIVIDUAL">Bireysel</option>
+                  <option value="TEAM">Takım</option>
+                </select>
+              </label>
+              {form.participationType === 'TEAM' && (
+                <label className="field-label">Takım adı <span className="required">*</span>
+                  <input className="text-input" value={form.teamName} onChange={(e) => setForm({ ...form, teamName: e.target.value })} placeholder="Takım adı" />
+                </label>
+              )}
+            </div>
+            {user.role === 'ADMIN' && options?.teachers && options.teachers.length > 0 && (
+              <div className="form-two-col">
+                <label className="field-label" style={{ gridColumn: '1 / -1' }}>Proje danışmanları (Yönetici seçimi)
+                  <small style={{ display: 'block', color: '#64748b', marginTop: '2px', fontWeight: 'normal' }}>Danışman öğretmen(ler) veya kendinizi seçebilirsiniz. Seçim yapmazsanız siz varsayılan proje danışmanı olarak atanacaksınız.</small>
+                  <div className="student-picker" style={{ maxHeight: '160px', marginTop: '6px' }}>
+                    {options.teachers.map((t) => (
+                      <label className="student-option" key={t.id}>
+                        <input type="checkbox" checked={selectedAdvisors.includes(t.id)} onChange={(e) => setSelectedAdvisors(e.target.checked ? [...selectedAdvisors, t.id] : selectedAdvisors.filter((id) => id !== t.id))} />
+                        <span className="student-avatar">{t.name.slice(0, 1)}</span>
+                        <span><b>{t.name}</b></span>
+                        <span className="check-box"><Check size={14} /></span>
+                      </label>
+                    ))}
+                  </div>
+                  {selectedAdvisors.length === 0 && (
+                    <div style={{ marginTop: '8px', padding: '8px 12px', background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: '6px', color: '#8c6b00', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <AlertTriangle size={16} />
+                      <span>Proje danışmanı seçilmedi. Projeyi oluşturan yönetici varsayılan proje danışmanı olarak atanacaktır.</span>
+                    </div>
+                  )}
+                </label>
+              </div>
+            )}
+            {user.role === 'TEACHER' && (
+              <div className="info-note" style={{ marginTop: '12px' }}>
+                <Activity size={16} />
+                <span>Projeyi oluşturan öğretmen varsayılan proje danışmanı olarak atanacaktır.</span>
+              </div>
+            )}
+          </section>
+          <section className="panel form-panel">
+            <div className="form-section-title">
+              <span>02</span>
+              <div>
+                <h3>Öğrencileri seçin</h3>
+                <p>{form.projectType === 'STUDENT' ? 'Projeye en az bir öğrenci ekleyin.' : 'Öğrenci eklemek bu proje türünde isteğe bağlıdır.'} {selected.length} öğrenci seçildi.</p>
+              </div>
+            </div>
+            <div className="search-wrap student-picker-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Öğrenci ara" /></div>
+            {students.length ? (
+              <div className="student-picker">
+                {students.map((s) => (
+                  <label className="student-option" key={s.enrollmentId}>
+                    <input type="checkbox" checked={selected.includes(s.enrollmentId)} onChange={(e) => setSelected(e.target.checked ? [...selected, s.enrollmentId] : selected.filter((id) => id !== s.enrollmentId))} />
+                    <span className="student-avatar">{s.firstName.slice(0, 1)}{s.lastName.slice(0, 1)}</span>
+                    <span><b>{personName(s.firstName, s.lastName)}</b><small>{s.bilsemNo} · {s.talentArea ?? 'Yetenek alanı yok'}</small></span>
+                    <span className="check-box"><Check size={14} /></span>
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div className="mini-empty">{studentsTotal ? 'Bu aramayla eşleşen öğrenci bulunamadı.' : 'Seçilen akademik yılda öğrenci kaydı yok.'}</div>
+            )}
+          </section>
+        </div>
+        <aside className="form-aside">
+          <div className="panel submit-panel">
+            <div className="submit-badge"><Sparkles size={20} /></div>
+            <h3>Projeyi kaydetmeye hazır mısınız?</h3>
+            <p>Proje bilgileri seçtiğiniz akademik yıl altında kaydedilir.</p>
+            {error && <div className="form-error" role="alert">{error}</div>}
+            <button className="button button-primary full-button" disabled={busy || loading}>{busy ? 'Kaydediliyor…' : 'Projeyi oluştur'} <ChevronRight size={16} /></button>
+            <span className="secure-note"><Shield size={14} /> Kayıt, kurum API’si üzerinden doğrulanır.</span>
+          </div>
+          <div className="info-note"><b><Activity size={16} /> Kayıt bilgisi</b><p>Başlık, açıklama, tür, akademik yıl, kategori, durum ve öğrenciler proje kaydına eklenir.</p></div>
+        </aside>
+      </form>
+    </>
+  )
 }
 
 type ImportPreviewRow = { rowNumber: number; bilsemNo: string | null; firstName?: string; lastName?: string; resultTypes: string[]; message?: string; matchedAdvisorUserId?: string | null; resolutionRequired?: boolean; rowId?: string }

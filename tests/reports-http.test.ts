@@ -125,7 +125,6 @@ describe('Reporting routes over real HTTP and isolated SQLite', () => {
   })
 
   it('tests V1.7.3 student report category and advisor filter scenarios', async () => {
-    // 1. Setup students & enrollments
     await db.insert(schema.students).values([
       { id: 's-1', bilsemNo: 'S-101', firstName: 'Student', lastName: 'One' },
       { id: 's-2', bilsemNo: 'S-102', firstName: 'Student', lastName: 'Two' },
@@ -135,7 +134,6 @@ describe('Reporting routes over real HTTP and isolated SQLite', () => {
       { id: 'e-2', studentId: 's-2', academicYearId: 'REPORT-year', isActive: true },
     ])
 
-    // 2. Project A: TÜBİTAK 2204-A, Advisor = REPORT-advisor, Creator = REPORT-teacher, Student 1
     await db.insert(schema.projects).values({
       id: 'p-tubitak-a', title: 'TÜBİTAK A Project', academicYearId: 'REPORT-year',
       categoryId: 'category-tubitak-2204-a', statusId: 'status-active', createdBy: 'REPORT-teacher', participationType: 'INDIVIDUAL',
@@ -143,7 +141,6 @@ describe('Reporting routes over real HTTP and isolated SQLite', () => {
     await db.insert(schema.projectStudents).values({ projectId: 'p-tubitak-a', enrollmentId: 'e-1' })
     await db.insert(schema.projectAdvisors).values({ projectId: 'p-tubitak-a', userId: 'REPORT-advisor', isPrimary: true })
 
-    // 3. Project B: TÜBİTAK 2204-A (second project for Student 1), Advisor = different advisor (REPORT-teacher), Creator = REPORT-advisor
     await db.insert(schema.projects).values({
       id: 'p-tubitak-a-2', title: 'Second TÜBİTAK A Project', academicYearId: 'REPORT-year',
       categoryId: 'category-tubitak-2204-a', statusId: 'status-active', createdBy: 'REPORT-advisor', participationType: 'INDIVIDUAL',
@@ -151,41 +148,66 @@ describe('Reporting routes over real HTTP and isolated SQLite', () => {
     await db.insert(schema.projectStudents).values({ projectId: 'p-tubitak-a-2', enrollmentId: 'e-1' })
     await db.insert(schema.projectAdvisors).values({ projectId: 'p-tubitak-a-2', userId: 'REPORT-teacher', isPrimary: true })
 
-    // Scenario 1: Only TÜBİTAK 2204-A category filter
     const resCat = await get('/api/reports/students?academicYearId=REPORT-year&categoryId=category-tubitak-2204-a', 'REPORT-teacher')
     expect(resCat.response.status).toBe(200)
     const studentsCat = resCat.body.data as Array<{ studentId: string; projectCount: number }>
-    expect(studentsCat).toHaveLength(1) // Student 1 has projects in this category
+    expect(studentsCat).toHaveLength(1)
     expect(studentsCat[0]?.studentId).toBe('s-1')
-    expect(studentsCat[0]?.projectCount).toBe(2) // Same student has 2 projects in category
+    expect(studentsCat[0]?.projectCount).toBe(2)
 
-    // Scenario 2: Only advisor filter (REPORT-advisor advised p-tubitak-a, student 1)
     const resAdv = await get('/api/reports/students?academicYearId=REPORT-year&advisorUserId=REPORT-advisor', 'REPORT-teacher')
     const studentsAdv = resAdv.body.data as Array<{ studentId: string }>
     expect(studentsAdv).toHaveLength(1)
     expect(studentsAdv[0]?.studentId).toBe('s-1')
 
-    // Scenario 3: TÜBİTAK 2204-A + advisor REPORT-advisor together (matches p-tubitak-a where REPORT-advisor is advisor)
     const resBoth = await get('/api/reports/students?academicYearId=REPORT-year&categoryId=category-tubitak-2204-a&advisorUserId=REPORT-advisor', 'REPORT-teacher')
     const studentsBoth = resBoth.body.data as Array<{ studentId: string }>
     expect(studentsBoth).toHaveLength(1)
     expect(studentsBoth[0]?.studentId).toBe('s-1')
 
-    // Scenario 4: Creator vs Advisor separation (REPORT-teacher created p-tubitak-a, but advised p-tubitak-a-2. Filtering by REPORT-teacher as advisor should return student 1 via p-tubitak-a-2, ignoring created_by)
     const resTeacherAdv = await get('/api/reports/students?academicYearId=REPORT-year&advisorUserId=REPORT-teacher', 'REPORT-teacher')
     const studentsTeacherAdv = resTeacherAdv.body.data as Array<{ studentId: string }>
     expect(studentsTeacherAdv).toHaveLength(1)
     expect(studentsTeacherAdv[0]?.studentId).toBe('s-1')
 
-    // Scenario 5: Student with no projects in selected category (Student 2 has no TÜBİTAK 2204-A projects)
     const resNoMatch = await get('/api/reports/students?academicYearId=REPORT-year&categoryId=category-etwinning', 'REPORT-teacher')
     const studentsNoMatch = resNoMatch.body.data as Array<{ studentId: string }>
     expect(studentsNoMatch).toHaveLength(0)
 
-    // Scenario 6: Pagination and empty data
     const resEmpty = await get('/api/reports/students?academicYearId=REPORT-year&search=NONEXISTENT', 'REPORT-teacher')
     expect(resEmpty.response.status).toBe(200)
     expect(resEmpty.body.data).toEqual([])
     expect(resEmpty.body.pagination?.total).toBe(0)
+  })
+
+  it('tests legacy fallback advisor compatibility across all reporting functions', async () => {
+    await db.insert(schema.students).values({ id: 's-fallback', bilsemNo: 'S-FB1', firstName: 'Fallback', lastName: 'Student' })
+    await db.insert(schema.studentEnrollments).values({
+      id: 'e-fallback', studentId: 's-fallback', academicYearId: 'REPORT-year', advisorUserId: 'REPORT-advisor', isActive: true,
+    })
+    await db.insert(schema.projects).values({
+      id: 'p-fallback', title: 'Fallback Project', academicYearId: 'REPORT-year', categoryId: 'category-etwinning', statusId: 'status-active', createdBy: 'REPORT-teacher', participationType: 'INDIVIDUAL',
+    })
+    await db.insert(schema.projectStudents).values({ projectId: 'p-fallback', enrollmentId: 'e-fallback' })
+
+    const projectsRes = await get('/api/reports/projects?academicYearId=REPORT-year&advisorUserId=REPORT-advisor', 'REPORT-admin')
+    expect(projectsRes.response.status).toBe(200)
+    const projData = projectsRes.body.data as Array<{ id: string; advisors: string[] }>
+    expect(projData).toHaveLength(1)
+    expect(projData[0]?.id).toBe('p-fallback')
+    expect(projData[0]?.advisors).toEqual(['TEST Danışman Öğretmen'])
+
+    const teachersRes = await get('/api/reports/teachers?academicYearId=REPORT-year', 'REPORT-admin')
+    expect(teachersRes.response.status).toBe(200)
+    const teacherData = teachersRes.body.data as Array<{ id: string; advisedProjectCount: number; advisedStudentCount: number }>
+    const advisorTeacher = teacherData.find((t) => t.id === 'REPORT-advisor')
+    expect(advisorTeacher?.advisedProjectCount).toBe(1)
+    expect(advisorTeacher?.advisedStudentCount).toBe(1)
+
+    const teacherProjRes = await get('/api/reports/teachers/REPORT-advisor/projects?type=advised&academicYearId=REPORT-year', 'REPORT-admin')
+    expect(teacherProjRes.response.status).toBe(200)
+    const teacherProjData = teacherProjRes.body.data as Array<{ id: string }>
+    expect(teacherProjData).toHaveLength(1)
+    expect(teacherProjData[0]?.id).toBe('p-fallback')
   })
 })

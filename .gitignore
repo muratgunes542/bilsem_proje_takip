@@ -21,6 +21,11 @@ dist-ssr
 .vercel
 coverage
 
+# Better Auth local sqlite files
+auth
+auth-wal
+auth-shm
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

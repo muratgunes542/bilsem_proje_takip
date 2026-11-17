@@ -28,6 +28,7 @@ export const importResultTypes = [
   'UNEXPECTED_ROW',
 ] as const
 export const participationTypes = ['INDIVIDUAL', 'TEAM'] as const
+export const projectTypes = ['STUDENT', 'TEACHER', 'INSTITUTION'] as const
 export const notificationTypes = [
   'DUPLICATE_PROJECT_WARNING',
   'TEAM_MEMBER_ADDED',
@@ -164,6 +165,7 @@ export const projects = sqliteTable('projects', {
   categoryId: text('category_id').notNull().references(() => projectCategories.id, { onDelete: 'restrict' }),
   statusId: text('status_id').notNull().references(() => projectStatuses.id, { onDelete: 'restrict' }),
   createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  projectType: text('project_type', { enum: projectTypes }).notNull().default('STUDENT'),
   participationType: text('participation_type', { enum: participationTypes }).notNull().default('INDIVIDUAL'),
   teamName: text('team_name'),
   ...timestamps,
@@ -328,3 +330,4 @@ export type ParticipationType = (typeof participationTypes)[number]
 export type NotificationType = (typeof notificationTypes)[number]
 export type ImportResultType = (typeof importResultTypes)[number]
 export type ImportRowStatus = (typeof importRowStatuses)[number]
+export type ProjectType = (typeof projectTypes)[number]

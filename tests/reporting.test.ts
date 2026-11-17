@@ -79,11 +79,11 @@ describe('Reporting and analytics use isolated synthetic records', () => {
   it('keeps creator and advisor contributions separate, counts multi-advisor student uniques, and exposes drill-through projects', async () => {
     const teachers = await handleApiRequest({ method: 'GET', url: '/api/reports/teachers?academicYearId=TEST-year-2025', headers: { 'x-test-user-id': 'TEST-teacher-a' } }, db)
     const teacherRows = teachers.payload.data as Array<{ id: string; createdProjectCount: number; advisedProjectCount: number; advisedStudentCount: number }>
-    expect(teacherRows.find((teacher) => teacher.id === 'TEST-teacher-a')).toMatchObject({ createdProjectCount: 2, advisedProjectCount: 0 })
-    expect(teacherRows.find((teacher) => teacher.id === 'TEST-teacher-b')).toMatchObject({ createdProjectCount: 0, advisedProjectCount: 2, advisedStudentCount: 2 })
+    expect(teacherRows.find((teacher) => teacher.id === 'TEST-teacher-a')).toMatchObject({ createdProjectCount: 2, advisedProjectCount: 2 })
+    expect(teacherRows.find((teacher) => teacher.id === 'TEST-teacher-b')).toMatchObject({ createdProjectCount: 0, advisedProjectCount: 1, advisedStudentCount: 2 })
     expect(teacherRows.find((teacher) => teacher.id === 'TEST-teacher-c')).toMatchObject({ advisedProjectCount: 1, advisedStudentCount: 2 })
     const advisedProjects = await handleApiRequest({ method: 'GET', url: '/api/reports/teachers/TEST-teacher-b/projects?type=advised&academicYearId=TEST-year-2025', headers: { 'x-test-user-id': 'TEST-teacher-a' } }, db)
-    expect(advisedProjects.payload.data).toHaveLength(2)
+    expect(advisedProjects.payload.data).toHaveLength(1)
   })
 
   it('uses each academic year denominator and excludes archived projects unless an administrator opts in', async () => {

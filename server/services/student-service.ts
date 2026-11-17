@@ -254,6 +254,7 @@ export class StudentService {
       .innerJoin(schema.users, eq(schema.users.id, schema.projects.createdBy))
       .where(and(
         eq(schema.studentEnrollments.studentId, studentId),
+        eq(schema.projects.projectType, 'STUDENT'),
         isNull(schema.projectStudents.deletedAt),
         isNull(schema.projects.deletedAt),
       ))

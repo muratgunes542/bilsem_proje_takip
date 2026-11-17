@@ -34,10 +34,19 @@ const createProjectSchema = z.object({
   academicYearId: z.string().min(1),
   categoryId: z.string().min(1),
   statusId: z.string().min(1),
+  projectType: z.enum(['STUDENT', 'TEACHER', 'INSTITUTION']).optional().default('STUDENT'),
   participationType: z.enum(['INDIVIDUAL', 'TEAM']),
   teamName: z.string().nullable().optional(),
-  enrollmentIds: z.array(z.string().min(1)).min(1, 'En az bir öğrenci seçilmelidir.').max(50),
+  enrollmentIds: z.array(z.string().min(1)).optional().default([]),
   advisorUserIds: z.array(z.string().min(1)).optional(),
+}).superRefine((val, ctx) => {
+  if (val.projectType === 'STUDENT' && val.enrollmentIds.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Öğrenci projelerinde en az bir öğrenci seçilmelidir.',
+      path: ['enrollmentIds'],
+    })
+  }
 })
 
 const updateProjectSchema = z.object({
@@ -45,6 +54,7 @@ const updateProjectSchema = z.object({
   description: z.string().max(10000).nullable().optional(),
   statusId: z.string().optional(),
   teamName: z.string().nullable().optional(),
+  projectType: z.never().optional(),
 })
 
 const addTeamMemberSchema = z.object({
@@ -317,6 +327,8 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
         search: parsedUrl.searchParams.get('search') || undefined,
         talentArea: parsedUrl.searchParams.get('talentArea') || undefined,
         advisorUserId: parsedUrl.searchParams.get('advisorUserId') || undefined,
+        classAdvisorUserId: parsedUrl.searchParams.get('classAdvisorUserId') || undefined,
+        classAdvisorName: parsedUrl.searchParams.get('classAdvisorName') || undefined,
         withoutProjects: parsedUrl.searchParams.get('withoutProjects') === 'true',
         includeArchived: parsedUrl.searchParams.get('includeArchived') === 'true',
       })
@@ -375,13 +387,14 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       const academicYearId = parsedUrl.searchParams.get('academicYearId') ?? undefined
       const categoryId = parsedUrl.searchParams.get('categoryId') ?? undefined
       const statusId = parsedUrl.searchParams.get('statusId') ?? undefined
+      const projectType = (parsedUrl.searchParams.get('projectType') as schema.ProjectType) ?? undefined
       const studentId = parsedUrl.searchParams.get('studentId') ?? undefined
       const advisorUserId = parsedUrl.searchParams.get('advisorUserId') ?? undefined
       const search = parsedUrl.searchParams.get('search') ?? undefined
       const includeArchived = parsedUrl.searchParams.get('includeArchived') === 'true'
 
       const list = await projectService.listProjects(actor, {
-        academicYearId, categoryId, statusId, studentId, advisorUserId, includeArchived, search,
+        academicYearId, categoryId, statusId, projectType, studentId, advisorUserId, includeArchived, search,
       })
       const paged = list.slice((page - 1) * pageSize, page * pageSize)
       return { statusCode: 200, payload: { success: true, data: paged, pagination: {
