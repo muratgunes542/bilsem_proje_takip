@@ -1455,8 +1455,8 @@ export class ProjectService {
     projectId: string,
     input: UpdateProjectAdvisorsInput,
   ) {
-    if (!actor || !actor.isActive || actor.role !== 'ADMIN') {
-      throw new AuthorizationError('Yalnızca yöneticiler proje danışmanlarını değiştirebilir.', 403)
+    if (!actor || !actor.isActive) {
+      throw new AuthorizationError()
     }
 
     const toAdd = [...new Set(input.addUserIds ?? [])]
@@ -1470,6 +1470,15 @@ export class ProjectService {
 
     return this.database.transaction(async (transaction) => {
       const project = await this.getProject(transaction, projectId)
+
+      if (actor.role !== 'ADMIN') {
+        if (actor.role !== 'TEACHER' || project.createdBy !== actor.id || project.projectType !== 'STUDENT') {
+          throw new AuthorizationError('Yalnızca projenin sahibi olan öğretmen danışman ekleyebilir.', 403)
+        }
+        if (toRemove.length > 0) {
+          throw new AuthorizationError('Danışman çıkarma yetkisi yalnızca yöneticilere aittir.', 403)
+        }
+      }
 
       // 1. Audit için gerçek önceki danışmanlar (fallback eklenmeden ÖNCE)
       const beforeAdvisors = await transaction

@@ -719,4 +719,176 @@ describe('Decoupled Class Advisorship and Project Advisorship Comprehensive Test
     expect(advisorRows[0]?.deletedBy).toBeNull()
     expect(advisorRows[0]?.isPrimary).toBe(true)
   })
+
+  it('31. Öğrenci projesini oluşturan öğretmen kendi projesine danışman ekleyebilir', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Owner Teacher Adding Advisor Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    await projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] })
+
+    const detail = await projectService.getProjectDetail(teacherA, created.projectId)
+    expect(detail.advisors).toHaveLength(2)
+    expect(detail.advisors.map((a: any) => a.userId)).toContain(teacherA.id)
+    expect(detail.advisors.map((a: any) => a.userId)).toContain(teacherB.id)
+  })
+
+  it('32. Proje sahibi olmayan öğretmen danışman ekleyemez ve ek danışman başka danışman ekleyemez', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Non-Owner Teacher Cannot Add Advisor',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    await expect(
+      projectService.updateProjectAdvisors(teacherB, created.projectId, { addUserIds: [teacherC.id] }),
+    ).rejects.toThrow('Yalnızca projenin sahibi olan öğretmen danışman ekleyebilir.')
+
+    await projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] })
+
+    await expect(
+      projectService.updateProjectAdvisors(teacherB, created.projectId, { addUserIds: [teacherC.id] }),
+    ).rejects.toThrow('Yalnızca projenin sahibi olan öğretmen danışman ekleyebilir.')
+  })
+
+  it('33. Proje sahibi öğretmen danışman çıkaramaz', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Owner Teacher Cannot Remove Advisor',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    await projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] })
+
+    await expect(
+      projectService.updateProjectAdvisors(teacherA, created.projectId, { removeUserIds: [teacherB.id] }),
+    ).rejects.toThrow('Danışman çıkarma yetkisi yalnızca yöneticilere aittir.')
+  })
+
+  it('33a. TEACHER olmayan ADMIN dışı kullanıcı, proje sahibi olsa bile danışman ekleyemez', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Unexpected Role Cannot Add Advisor',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+    const unexpectedRoleActor = { ...teacherA }
+    Object.defineProperty(unexpectedRoleActor, 'role', { value: 'STUDENT' })
+
+    await expect(
+      projectService.updateProjectAdvisors(unexpectedRoleActor, created.projectId, { addUserIds: [teacherB.id] }),
+    ).rejects.toMatchObject({ statusCode: 403 })
+  })
+
+  it('34. Ek danışman projeyi görüntüleyebilir fakat düzenleyemez', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Advisor View vs Modify Test',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    await projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] })
+
+    const detail = await projectService.getProjectDetail(teacherB, created.projectId)
+    expect(detail.project.id).toBe(created.projectId)
+
+    await expect(
+      projectService.updateProject(teacherB, created.projectId, { title: 'Unauthorized Edit Title' }),
+    ).rejects.toThrow(AuthorizationError)
+  })
+
+  it('34a. TEACHER ve INSTITUTION proje türlerinde danışman yönetimi ADMIN ile sınırlı kalır', async () => {
+    const teacherProject = await projectService.createProject(teacherA, {
+      title: 'Teacher Type Advisor Authorization',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      projectType: 'TEACHER',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: [],
+    })
+    const institutionProject = await projectService.createProject(admin, {
+      title: 'Institution Type Advisor Authorization',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      projectType: 'INSTITUTION',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: [],
+    })
+
+    await expect(
+      projectService.updateProjectAdvisors(teacherA, teacherProject.projectId, { addUserIds: [teacherB.id] }),
+    ).rejects.toMatchObject({ statusCode: 403 })
+    await expect(
+      projectService.updateProjectAdvisors(teacherA, institutionProject.projectId, { addUserIds: [teacherB.id] }),
+    ).rejects.toMatchObject({ statusCode: 403 })
+
+    for (const projectId of [teacherProject.projectId, institutionProject.projectId]) {
+      await projectService.updateProjectAdvisors(admin, projectId, { addUserIds: [teacherB.id] })
+      await projectService.updateProjectAdvisors(admin, projectId, { removeUserIds: [teacherB.id] })
+      const detail = await projectService.getProjectDetail(admin, projectId)
+      expect(detail.advisors.map((advisor: { userId: string }) => advisor.userId)).not.toContain(teacherB.id)
+    }
+  })
+
+  it('35. ADMIN danışman ekleyebilir ve silebilir', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Admin Full Advisor Control Project',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    await projectService.updateProjectAdvisors(admin, created.projectId, { addUserIds: [teacherB.id] })
+    let detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors).toHaveLength(2)
+
+    await projectService.updateProjectAdvisors(admin, created.projectId, { removeUserIds: [teacherB.id] })
+    detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors).toHaveLength(1)
+    expect(detail.advisors[0]?.userId).toBe(teacherA.id)
+  })
+
+  it('36. Mükerrer danışman ekleme reddedilir ve önceden silinen danışman tekrar eklendiğinde reactivate edilir', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Duplicate and Reactivation Advisor Test',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+    })
+
+    await projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] })
+
+    await expect(
+      projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] }),
+    ).rejects.toThrow('Seçilen öğretmen zaten projenin aktif danışmanıdır.')
+
+    await projectService.updateProjectAdvisors(admin, created.projectId, { removeUserIds: [teacherB.id] })
+
+    await projectService.updateProjectAdvisors(teacherA, created.projectId, { addUserIds: [teacherB.id] })
+
+    const detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors.map((a: any) => a.userId)).toContain(teacherB.id)
+  })
 })

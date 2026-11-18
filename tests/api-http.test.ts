@@ -228,16 +228,119 @@ describe('HTTP API adapter', () => {
       categoryId,
       statusId,
       createdBy: 'http-teacher',
+      projectType: 'STUDENT',
     })
     await db.insert(schema.projectAdvisors).values({ projectId: 'proj-http-adv', userId: 'http-teacher', isPrimary: true })
 
-    // 1. Öğretmen isteği -> 403 Forbidden
-    const teacherReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+    await db.insert(schema.users).values([
+      { id: 'http-teacher-other', name: 'HTTP Teacher Other', email: 'http-other@test.com', role: 'TEACHER', isActive: true },
+      { id: 'http-teacher-2', name: 'HTTP Teacher Two', email: 'http-teacher-2@test.com', role: 'TEACHER', isActive: true },
+      { id: 'http-teacher-3', name: 'HTTP Teacher Three', email: 'http-teacher-3@test.com', role: 'TEACHER', isActive: true },
+    ])
+
+    const ownerDetailResponse = await fetch(`${baseUrl}/api/projects/proj-http-adv`, {
+      headers: { 'x-test-user-id': 'http-teacher' },
+    })
+    expect(ownerDetailResponse.status).toBe(200)
+    const ownerDetail = await ownerDetailResponse.json() as { data: { project: { projectType: string } } }
+    expect(['STUDENT', 'TEACHER', 'INSTITUTION']).toContain(ownerDetail.data.project.projectType)
+    expect(ownerDetail.data.project.projectType).toBe('STUDENT')
+
+    await db.insert(schema.projects).values([
+      {
+        id: 'proj-http-teacher-type',
+        title: 'HTTP Teacher Type Project',
+        academicYearId: 'http-year',
+        categoryId,
+        statusId,
+        createdBy: 'http-teacher',
+        projectType: 'TEACHER',
+        participationType: 'INDIVIDUAL',
+      },
+      {
+        id: 'proj-http-institution-type',
+        title: 'HTTP Institution Type Project',
+        academicYearId: 'http-year',
+        categoryId,
+        statusId,
+        createdBy: 'http-admin',
+        projectType: 'INSTITUTION',
+        participationType: 'INDIVIDUAL',
+      },
+    ])
+    for (const [projectId, projectType] of [
+      ['proj-http-teacher-type', 'TEACHER'],
+      ['proj-http-institution-type', 'INSTITUTION'],
+    ]) {
+      const typeDetailResponse = await fetch(`${baseUrl}/api/projects/${projectId}`, {
+        headers: { 'x-test-user-id': 'http-teacher' },
+      })
+      expect(typeDetailResponse.status).toBe(200)
+      const typeDetail = await typeDetailResponse.json() as { data: { project: { projectType: string } } }
+      expect(['STUDENT', 'TEACHER', 'INSTITUTION']).toContain(typeDetail.data.project.projectType)
+      expect(typeDetail.data.project.projectType).toBe(projectType)
+    }
+
+    // 1. Yetkisiz öğretmen isteği (proje sahibi olmayan öğretmen) -> 403 Forbidden
+    const nonOwnerReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher' },
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher-other' },
       body: JSON.stringify({ addUserIds: ['http-teacher'] }),
     })
-    expect(teacherReq.status).toBe(403)
+    expect(nonOwnerReq.status).toBe(403)
+
+    // Simulate an unexpected persisted role; normal schema guards prevent creating one.
+    await client.execute({ sql: 'DROP TRIGGER users_role_guard_insert' })
+    await db.insert(schema.users).values({
+      id: 'http-student-role',
+      name: 'Non-teacher Role',
+      email: 'http-student-role@test.com',
+      role: 'STUDENT' as schema.UserRole,
+      isActive: true,
+    } as typeof schema.users.$inferInsert)
+    const nonTeacherRoleReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-student-role' },
+      body: JSON.stringify({ addUserIds: ['http-teacher-2'] }),
+    })
+    expect(nonTeacherRoleReq.status).toBe(403)
+
+    // 1b. Proje sahibi öğretmenin danışman silmeye çalışması -> 403 Forbidden
+    const ownerRemoveReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher' },
+      body: JSON.stringify({ removeUserIds: ['http-teacher'] }),
+    })
+    expect(ownerRemoveReq.status).toBe(403)
+
+    // 1c. Proje sahibi öğretmen danışman ekleyebilir.
+    const ownerAddReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher' },
+      body: JSON.stringify({ addUserIds: ['http-teacher-2'] }),
+    })
+    expect(ownerAddReq.status).toBe(200)
+    const ownerAdded = await ownerAddReq.json() as { data: { advisors: Array<{ userId: string }> } }
+    expect(ownerAdded.data.advisors.map((advisor) => advisor.userId)).toContain('http-teacher-2')
+
+    const advisorDetail = await fetch(`${baseUrl}/api/projects/proj-http-adv`, {
+      headers: { 'x-test-user-id': 'http-teacher-2' },
+    })
+    expect(advisorDetail.status).toBe(200)
+
+    const advisorEdit = await fetch(`${baseUrl}/api/projects/proj-http-adv`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher-2' },
+      body: JSON.stringify({ title: 'Unauthorized Advisor Edit' }),
+    })
+    expect(advisorEdit.status).toBe(403)
+
+    const duplicateAddReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-teacher' },
+      body: JSON.stringify({ addUserIds: ['http-teacher-2'] }),
+    })
+    expect(duplicateAddReq.status).toBe(422)
 
     // 2. Geçersiz öğretmen ekleme isteği (başka bir yönetici veya öğretmen olmayan kullanıcı ekleme) -> 422 Unprocessable Entity
     await db.insert(schema.users).values({ id: 'http-admin-2', name: 'HTTP Admin Two', email: 'http-admin-2@test.com', role: 'ADMIN', isActive: true })
@@ -249,17 +352,22 @@ describe('HTTP API adapter', () => {
     expect(invalidReq.status).toBe(422)
 
     // 3. Geçerli yönetici isteği -> 200 OK
-    // Ek öğretmen hesabı oluştur
-    await db.insert(schema.users).values({ id: 'http-teacher-2', name: 'HTTP Teacher Two', email: 'http-teacher-2@test.com', role: 'TEACHER', isActive: true })
     const validReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-admin' },
-      body: JSON.stringify({ addUserIds: ['http-teacher-2'] }),
+      body: JSON.stringify({ addUserIds: ['http-teacher-3'] }),
     })
     expect(validReq.status).toBe(200)
     const payload = await validReq.json() as { success: boolean; data: { advisors: Array<{ userId: string }> } }
     expect(payload.success).toBe(true)
-    expect(payload.data.advisors.map((a) => a.userId)).toContain('http-teacher-2')
+    expect(payload.data.advisors.map((a) => a.userId)).toContain('http-teacher-3')
+
+    const adminRemoveReq = await fetch(`${baseUrl}/api/projects/proj-http-adv/advisors`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user-id': 'http-admin' },
+      body: JSON.stringify({ removeUserIds: ['http-teacher-2'] }),
+    })
+    expect(adminRemoveReq.status).toBe(200)
   })
 
   it('normalizes notification request URLs robustly in getAuthenticatedApiUser', async () => {
