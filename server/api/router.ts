@@ -54,6 +54,8 @@ const updateProjectSchema = z.object({
   description: z.string().max(10000).nullable().optional(),
   statusId: z.string().optional(),
   teamName: z.string().nullable().optional(),
+  categoryId: z.string().optional(),
+  academicYearId: z.never().optional(),
   projectType: z.never().optional(),
 })
 
@@ -75,6 +77,18 @@ const updateProjectAdvisorsSchema = z.object({
   addUserIds: z.array(z.string().min(1)).optional().default([]),
   removeUserIds: z.array(z.string().min(1)).optional().default([]),
 }).strict()
+
+const createCategorySchema = z.object({
+  code: z.string().trim().min(2).max(50),
+  name: z.string().trim().min(1).max(100),
+  duplicateCheckEnabled: z.boolean().optional(),
+})
+
+const updateCategorySchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  isActive: z.boolean().optional(),
+  duplicateCheckEnabled: z.boolean().optional(),
+})
 
 const updateUserSchema = z.object({
   role: z.enum(['ADMIN', 'TEACHER']).optional(),
@@ -228,6 +242,28 @@ export async function handleApiRequest(req: ApiRequest, database: AppDatabase = 
       const body = updateUserSchema.parse(req.body)
       const updated = await userService.updateUserStatus(actor, targetUserId, body)
       return { statusCode: 200, payload: { success: true, data: updated } }
+    }
+
+    if (method === 'GET' && pathname === '/api/admin/categories') {
+      const actor = requireAuth()
+      const categories = await projectService.listCategories(actor)
+      return { statusCode: 200, payload: { success: true, data: categories } }
+    }
+
+    if (method === 'POST' && pathname === '/api/admin/categories') {
+      const actor = requireAuth()
+      const body = createCategorySchema.parse(req.body)
+      const result = await projectService.createCategory(actor, body)
+      return { statusCode: 201, payload: { success: true, data: result } }
+    }
+
+    const adminCategoryMatch = pathname.match(/^\/api\/admin\/categories\/([^/]+)$/)
+    if (adminCategoryMatch && method === 'PATCH') {
+      const actor = requireAuth()
+      const categoryId = adminCategoryMatch[1]!
+      const body = updateCategorySchema.parse(req.body)
+      const result = await projectService.updateCategory(actor, categoryId, body)
+      return { statusCode: 200, payload: { success: true, data: result } }
     }
 
     // -------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, eq, inArray, isNull, like, ne, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, like, ne, or, sql } from 'drizzle-orm'
 import type { LibSQLDatabase } from 'drizzle-orm/libsql'
 import { assertCanCreateProject, assertCanModifyProject, canArchiveProject, canRestoreProject, type AuthenticatedUser, AuthorizationError, ResourceNotFoundError } from '../authorization.js'
 import * as schema from '../db/schema.js'
@@ -43,6 +43,14 @@ export type ListProjectsFilters = {
 export type UpdateProjectAdvisorsInput = {
   addUserIds?: string[]
   removeUserIds?: string[]
+}
+
+export type UpdateProjectInput = {
+  title?: string
+  description?: string | null
+  statusId?: string
+  teamName?: string | null
+  categoryId?: string
 }
 
 export class ProjectRuleError extends Error {
@@ -92,6 +100,152 @@ export class ProjectService {
     }
 
     return { categories, statuses, teachers }
+  }
+
+  async listCategories(actor: AuthenticatedUser) {
+    if (!actor?.isActive || actor.role !== 'ADMIN') throw new AuthorizationError()
+    return this.database
+      .select({
+        id: schema.projectCategories.id,
+        code: schema.projectCategories.code,
+        name: schema.projectCategories.name,
+        isActive: schema.projectCategories.isActive,
+        duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled,
+        duplicateRule: schema.projectCategories.duplicateRule,
+        createdAt: schema.projectCategories.createdAt,
+        updatedAt: schema.projectCategories.updatedAt,
+      })
+      .from(schema.projectCategories)
+      .where(isNull(schema.projectCategories.deletedAt))
+      .orderBy(schema.projectCategories.name)
+  }
+
+  async createCategory(
+    actor: AuthenticatedUser,
+    input: { code: string; name: string; duplicateCheckEnabled?: boolean },
+  ) {
+    if (!actor?.isActive || actor.role !== 'ADMIN') throw new AuthorizationError()
+
+    const code = input.code.trim().toUpperCase()
+    const name = input.name.trim()
+
+    if (!code || !/^[A-Z0-9_]{2,50}$/.test(code)) {
+      throw new ProjectRuleError('Kategori kodu 2-50 karakter arasında ve büyük harf/rakam/alt çizgi olmalıdır.')
+    }
+    if (!name || name.length > 100) {
+      throw new ProjectRuleError('Kategori adı en fazla 100 karakter olmalıdır.')
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const existing = await transaction
+        .select({ id: schema.projectCategories.id })
+        .from(schema.projectCategories)
+        .where(or(
+          sql`lower(trim(${schema.projectCategories.code})) = lower(${code})`,
+          sql`lower(trim(${schema.projectCategories.name})) = lower(trim(${name}))`,
+        ))
+        .limit(1)
+
+      if (existing[0]) {
+        throw new ProjectRuleError('Bu kategori kodu veya adı zaten mevcut.')
+      }
+
+      const id = `category-${code.toLowerCase().replace(/_/g, '-')}`
+      const now = new Date()
+
+      await transaction.insert(schema.projectCategories).values({
+        id,
+        code,
+        name,
+        isActive: true,
+        duplicateCheckEnabled: Boolean(input.duplicateCheckEnabled),
+        duplicateRule: 'ACADEMIC_YEAR_STUDENT_CATEGORY',
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      await transaction.insert(schema.auditLogs).values({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        action: 'ADMIN_CATEGORY_CREATED',
+        entityType: 'CATEGORY',
+        entityId: id,
+        afterJson: JSON.stringify({ id, code, name, duplicateCheckEnabled: Boolean(input.duplicateCheckEnabled) }),
+      })
+
+      return { id, code, name }
+    })
+  }
+
+  async updateCategory(
+    actor: AuthenticatedUser,
+    categoryId: string,
+    input: { name?: string; isActive?: boolean; duplicateCheckEnabled?: boolean },
+  ) {
+    if (!actor?.isActive || actor.role !== 'ADMIN') throw new AuthorizationError()
+
+    return this.database.transaction(async (transaction) => {
+      const [category] = await transaction
+        .select()
+        .from(schema.projectCategories)
+        .where(and(eq(schema.projectCategories.id, categoryId), isNull(schema.projectCategories.deletedAt)))
+        .limit(1)
+
+      if (!category) {
+        throw new ResourceNotFoundError('Kategori bulunamadı.')
+      }
+
+      const changes: Partial<{ name: string; isActive: boolean; duplicateCheckEnabled: boolean; updatedAt: Date }> = {
+        updatedAt: new Date(),
+      }
+
+      if (input.name !== undefined) {
+        const trimmedName = input.name.trim()
+        if (!trimmedName || trimmedName.length > 100) {
+          throw new ProjectRuleError('Kategori adı en fazla 100 karakter olmalıdır.')
+        }
+
+        const duplicateName = await transaction
+          .select({ id: schema.projectCategories.id })
+          .from(schema.projectCategories)
+          .where(and(
+            sql`lower(trim(${schema.projectCategories.name})) = lower(trim(${trimmedName}))`,
+            ne(schema.projectCategories.id, categoryId),
+          ))
+          .limit(1)
+
+        if (duplicateName[0]) {
+          throw new ProjectRuleError('Bu kategori adı başka bir kategoride kullanılıyor.')
+        }
+
+        changes.name = trimmedName
+      }
+
+      if (input.isActive !== undefined) {
+        changes.isActive = Boolean(input.isActive)
+      }
+
+      if (input.duplicateCheckEnabled !== undefined) {
+        changes.duplicateCheckEnabled = Boolean(input.duplicateCheckEnabled)
+      }
+
+      await transaction
+        .update(schema.projectCategories)
+        .set(changes)
+        .where(eq(schema.projectCategories.id, categoryId))
+
+      await transaction.insert(schema.auditLogs).values({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        action: 'ADMIN_CATEGORY_UPDATED',
+        entityType: 'CATEGORY',
+        entityId: categoryId,
+        beforeJson: JSON.stringify(category),
+        afterJson: JSON.stringify({ ...category, ...changes }),
+      })
+
+      return { id: categoryId, ...changes }
+    })
   }
 
   async listProjects(actor: AuthenticatedUser, filters: ListProjectsFilters = {}) {
@@ -447,6 +601,19 @@ export class ProjectService {
       }
 
       const projectId = randomUUID()
+      const activeCategory = await transaction
+        .select({ id: schema.projectCategories.id })
+        .from(schema.projectCategories)
+        .where(and(
+          eq(schema.projectCategories.id, input.categoryId),
+          eq(schema.projectCategories.isActive, true),
+          isNull(schema.projectCategories.deletedAt),
+        ))
+        .limit(1)
+      if (!activeCategory[0]) {
+        throw new ProjectRuleError('Yeni projeler için aktif bir kategori seçilmelidir.')
+      }
+
       await transaction.insert(schema.projects).values({
         id: projectId,
         title: input.title,
@@ -468,14 +635,42 @@ export class ProjectService {
       }
 
       if (actor.role === 'TEACHER') {
-        if (input.advisorUserIds !== undefined && input.advisorUserIds !== null) {
+        if (effectiveProjectType !== 'TEACHER' && input.advisorUserIds !== undefined && input.advisorUserIds !== null) {
           throw new ProjectRuleError('Öğretmenler danışman seçimi yapamaz.')
         }
-        await transaction.insert(schema.projectAdvisors).values({
-          projectId,
-          userId: actor.id,
-          isPrimary: true,
-        }).onConflictDoNothing()
+
+        const additionalTeacherIds = input.advisorUserIds && input.advisorUserIds.length > 0
+          ? [...new Set(input.advisorUserIds)].filter((id) => id !== actor.id)
+          : []
+
+        for (const userId of additionalTeacherIds) {
+          const validTeacher = await transaction
+            .select({ id: schema.users.id })
+            .from(schema.users)
+            .where(and(
+              eq(schema.users.id, userId),
+              eq(schema.users.role, 'TEACHER'),
+              eq(schema.users.isActive, true),
+              isNull(schema.users.deletedAt),
+            ))
+            .limit(1)
+          if (!validTeacher[0]) {
+            throw new ProjectRuleError('Seçilen danışman aktif bir öğretmen olmalıdır.')
+          }
+        }
+
+        await transaction.insert(schema.projectAdvisors).values([
+          {
+            projectId,
+            userId: actor.id,
+            isPrimary: true,
+          },
+          ...additionalTeacherIds.map((userId) => ({
+            projectId,
+            userId,
+            isPrimary: false,
+          })),
+        ]).onConflictDoNothing()
       } else {
         if (input.advisorUserIds !== undefined && input.advisorUserIds !== null && input.advisorUserIds.length > 0) {
           const uniqueAdvisorIds = [...new Set(input.advisorUserIds)]
@@ -602,7 +797,19 @@ export class ProjectService {
       })
 
       if (conflicts.length > 0) {
-        const recipients = new Set<string>([actor.id, ...conflicts.map((conflict) => conflict.ownerId)])
+        const relatedProjectIds = [...new Set([projectId, ...conflicts.map((conflict) => conflict.projectId)])]
+        const advisorRows = await transaction
+          .select({ userId: schema.projectAdvisors.userId })
+          .from(schema.projectAdvisors)
+          .where(and(
+            inArray(schema.projectAdvisors.projectId, relatedProjectIds),
+            isNull(schema.projectAdvisors.deletedAt),
+          ))
+        const recipients = new Set<string>([
+          actor.id,
+          ...conflicts.map((conflict) => conflict.ownerId),
+          ...advisorRows.map((advisor) => advisor.userId),
+        ])
         await transaction.insert(schema.notifications).values([...recipients].map((recipientId) => ({
           id: randomUUID(),
           recipientId,
@@ -625,21 +832,133 @@ export class ProjectService {
     })
   }
 
-  async updateProject(actor: AuthenticatedUser, projectId: string, changes: { title?: string; description?: string | null; statusId?: string; teamName?: string | null }) {
+  async updateProject(actor: AuthenticatedUser, projectId: string, changes: UpdateProjectInput) {
     return this.database.transaction(async (transaction) => {
       const project = await this.getProject(transaction, projectId)
       assertCanModifyProject(actor, project)
 
+      const oldCategoryId = project.categoryId
+      const newCategoryId = changes.categoryId ?? oldCategoryId
+      const categoryChanged = changes.categoryId !== undefined && changes.categoryId !== oldCategoryId
+
+      let oldCategoryName = oldCategoryId
+      let newCategoryName = newCategoryId
+      if (categoryChanged) {
+        const [oldCat] = await transaction.select({ name: schema.projectCategories.name }).from(schema.projectCategories).where(eq(schema.projectCategories.id, oldCategoryId))
+        const [newCat] = await transaction.select({
+          name: schema.projectCategories.name,
+          isActive: schema.projectCategories.isActive,
+          deletedAt: schema.projectCategories.deletedAt,
+        }).from(schema.projectCategories).where(eq(schema.projectCategories.id, newCategoryId))
+        if (!newCat || !newCat.isActive || newCat.deletedAt !== null) {
+          throw new ProjectRuleError('Projeler yalnızca aktif bir kategoriye taşınabilir.')
+        }
+        oldCategoryName = oldCat?.name ?? oldCategoryId
+        newCategoryName = newCat.name
+      }
+
       await transaction.update(schema.projects).set({ ...changes, updatedAt: new Date() }).where(eq(schema.projects.id, projectId))
+
+      const conflicts: ProjectConflict[] = []
+      if (categoryChanged) {
+        await transaction.delete(schema.projectDuplicateClaims).where(eq(schema.projectDuplicateClaims.projectId, projectId))
+
+        const [newCategory] = await transaction.select({
+          duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled,
+          duplicateRule: schema.projectCategories.duplicateRule,
+        }).from(schema.projectCategories).where(eq(schema.projectCategories.id, newCategoryId))
+
+        if (newCategory?.duplicateCheckEnabled && newCategory.duplicateRule === 'ACADEMIC_YEAR_STUDENT_CATEGORY') {
+          const members = await transaction.select({
+            studentId: schema.studentEnrollments.studentId,
+            bilsemNo: schema.students.bilsemNo,
+          }).from(schema.projectStudents)
+            .innerJoin(schema.studentEnrollments, eq(schema.studentEnrollments.id, schema.projectStudents.enrollmentId))
+            .innerJoin(schema.students, eq(schema.students.id, schema.studentEnrollments.studentId))
+            .where(and(eq(schema.projectStudents.projectId, projectId), isNull(schema.projectStudents.deletedAt)))
+
+          for (const member of members) {
+            await transaction.insert(schema.projectDuplicateClaims).values({
+              academicYearId: project.academicYearId,
+              studentId: member.studentId,
+              categoryId: newCategoryId,
+              projectId,
+            }).onConflictDoNothing()
+
+            const claim = await transaction
+              .select({
+                projectId: schema.projects.id,
+                title: schema.projects.title,
+                status: schema.projectStatuses.name,
+                ownerId: schema.users.id,
+                ownerName: schema.users.name,
+              })
+              .from(schema.projectDuplicateClaims)
+              .innerJoin(schema.projects, eq(schema.projects.id, schema.projectDuplicateClaims.projectId))
+              .innerJoin(schema.projectStatuses, eq(schema.projectStatuses.id, schema.projects.statusId))
+              .innerJoin(schema.users, eq(schema.users.id, schema.projects.createdBy))
+              .where(and(
+                eq(schema.projectDuplicateClaims.academicYearId, project.academicYearId),
+                eq(schema.projectDuplicateClaims.studentId, member.studentId),
+                eq(schema.projectDuplicateClaims.categoryId, newCategoryId),
+                ne(schema.projectDuplicateClaims.projectId, projectId),
+              ))
+              .limit(1)
+
+            if (claim[0]) {
+              conflicts.push({
+                studentId: member.studentId,
+                bilsemNo: member.bilsemNo,
+                ...claim[0],
+              })
+            }
+          }
+        }
+      }
+
+      const action = categoryChanged ? 'PROJECT_CATEGORY_CHANGED' : (changes.statusId ? 'PROJECT_STATUS_UPDATED' : 'PROJECT_UPDATED')
       await transaction.insert(schema.auditLogs).values({
         id: randomUUID(),
         actorUserId: actor.id,
-        action: changes.statusId ? 'PROJECT_STATUS_UPDATED' : 'PROJECT_UPDATED',
+        action,
         entityType: 'PROJECT',
         entityId: projectId,
-        beforeJson: JSON.stringify(project),
-        afterJson: JSON.stringify(changes),
+        beforeJson: JSON.stringify({ ...project, categoryId: oldCategoryId, categoryName: oldCategoryName }),
+        afterJson: JSON.stringify({ ...changes, oldCategoryId, oldCategoryName, newCategoryId, newCategoryName, conflicts }),
       })
+
+      if (conflicts.length > 0) {
+        const relatedProjectIds = [...new Set([projectId, ...conflicts.map((conflict) => conflict.projectId)])]
+        const advisorRows = await transaction
+          .select({ userId: schema.projectAdvisors.userId })
+          .from(schema.projectAdvisors)
+          .where(and(
+            inArray(schema.projectAdvisors.projectId, relatedProjectIds),
+            isNull(schema.projectAdvisors.deletedAt),
+          ))
+        const recipients = new Set<string>([
+          actor.id,
+          project.createdBy,
+          ...conflicts.map((conflict) => conflict.ownerId),
+          ...advisorRows.map((advisor) => advisor.userId),
+        ])
+        await transaction.insert(schema.notifications).values([...recipients].map((recipientId) => ({
+          id: randomUUID(),
+          recipientId,
+          projectId,
+          type: 'DUPLICATE_PROJECT_WARNING' as const,
+          title: 'Mükerrer TÜBİTAK proje uyarısı',
+          message: this.buildConflictMessage(conflicts),
+        })))
+        await transaction.insert(schema.auditLogs).values({
+          id: randomUUID(),
+          actorUserId: actor.id,
+          action: 'DUPLICATE_PROJECT_WARNING',
+          entityType: 'PROJECT',
+          entityId: projectId,
+          afterJson: JSON.stringify(conflicts),
+        })
+      }
 
       if (changes.statusId) {
         const advisorRows = await transaction.select({ userId: schema.projectAdvisors.userId })
@@ -651,6 +970,8 @@ export class ProjectService {
           title: 'Proje durumu güncellendi', message: `“${project.title}” projesinin durumu güncellendi.`,
         })))
       }
+
+      return { projectId, conflicts }
     })
   }
 

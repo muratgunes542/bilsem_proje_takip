@@ -222,6 +222,35 @@ export async function updateProjectAdvisors(
   )
 }
 
+export type CategoryItem = {
+  id: string
+  code: string
+  name: string
+  isActive: boolean
+  duplicateCheckEnabled: boolean
+  duplicateRule?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export async function fetchAdminCategories() {
+  return apiRequest<CategoryItem[]>('/api/admin/categories')
+}
+
+export async function createAdminCategory(input: { code: string; name: string; duplicateCheckEnabled?: boolean }) {
+  return apiRequest<{ id: string; code: string; name: string }>('/api/admin/categories', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updateAdminCategory(categoryId: string, input: { name?: string; isActive?: boolean; duplicateCheckEnabled?: boolean }) {
+  return apiRequest<{ id: string; name?: string; isActive?: boolean; duplicateCheckEnabled?: boolean }>(`/api/admin/categories/${categoryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 export const signIn = (email: string, password: string, rememberMe = false) =>
   authRequest('sign-in/email', { email, password, rememberMe })
 export const signUp = (name: string, email: string, password: string) => authRequest('sign-up/email', { name, email, password })

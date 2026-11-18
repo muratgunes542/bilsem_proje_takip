@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { handleApiRequest } from '../server/api/router'
 import { AuthorizationError, type AuthenticatedUser } from '../server/authorization'
 import * as schema from '../server/db/schema'
 import { ProjectService, ProjectRuleError } from '../server/services/project-service'
@@ -30,6 +31,7 @@ describe('ProjectType (STUDENT, TEACHER, INSTITUTION) Architectural & Business R
       { id: admin.id, name: 'Yönetici 1', email: 'admin1@test.com', role: 'ADMIN', isActive: true },
       { id: teacherA.id, name: 'Öğretmen A', email: 'teachera@test.com', role: 'TEACHER', isActive: true },
       { id: teacherB.id, name: 'Öğretmen B', email: 'teacherb@test.com', role: 'TEACHER', isActive: true },
+      { id: 'inactive-teacher', name: 'Pasif Öğretmen', email: 'inactive@test.com', role: 'TEACHER', isActive: false },
     ])
 
     await db.insert(schema.academicYears).values([
@@ -71,6 +73,120 @@ describe('ProjectType (STUDENT, TEACHER, INSTITUTION) Architectural & Business R
     expect(detail.advisors).toHaveLength(1)
     expect(detail.advisors[0]?.userId).toBe(teacherA.id)
     expect(detail.advisors[0]?.isPrimary).toBe(true)
+  })
+
+  it('TEACHER ek öğretmen seçebilir; creator primary, ek öğretmenler secondary olur ve yalnızca creator düzenler', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Ek Öğretmenli Proje',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      projectType: 'TEACHER',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: [],
+      advisorUserIds: [teacherB.id],
+    })
+
+    const detail = await projectService.getProjectDetail(teacherB, created.projectId)
+    expect(detail.advisors).toHaveLength(2)
+    expect(detail.advisors.find((advisor: { userId: string; isPrimary: boolean }) => advisor.userId === teacherA.id)?.isPrimary).toBe(true)
+    expect(detail.advisors.find((advisor: { userId: string; isPrimary: boolean }) => advisor.userId === teacherB.id)?.isPrimary).toBe(false)
+    await expect(projectService.updateProject(teacherB, created.projectId, { title: 'Yetkisiz değişiklik' }))
+      .rejects.toThrow(AuthorizationError)
+    await expect(projectService.updateProject(teacherA, created.projectId, { title: 'Creator güncelledi' }))
+      .resolves.toBeDefined()
+  })
+
+  it('API TEACHER projesinde ek danışman atar; ek danışman görüntüleyebilir ancak düzenleyemez', async () => {
+    const createResponse = await handleApiRequest({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { 'x-test-user-id': teacherA.id },
+      body: {
+        title: 'API ile oluşturulan ek danışmanlı proje',
+        academicYearId: 'year-2024',
+        categoryId: 'category-etwinning',
+        statusId: 'status-draft',
+        projectType: 'TEACHER',
+        participationType: 'INDIVIDUAL',
+        enrollmentIds: [],
+        advisorUserIds: [teacherB.id],
+      },
+    }, db)
+
+    expect(createResponse.statusCode).toBe(201)
+    const createdData = (createResponse.payload as { success: true; data: { projectId: string } }).data
+    const viewResponse = await handleApiRequest({
+      method: 'GET',
+      url: `/api/projects/${createdData.projectId}`,
+      headers: { 'x-test-user-id': teacherB.id },
+    }, db)
+    expect(viewResponse.statusCode).toBe(200)
+    const detail = (viewResponse.payload as { success: true; data: { advisors: Array<{ userId: string; isPrimary: boolean }> } }).data
+    expect(detail.advisors).toHaveLength(2)
+    expect(detail.advisors.find((advisor) => advisor.userId === teacherA.id)?.isPrimary).toBe(true)
+    expect(detail.advisors.find((advisor) => advisor.userId === teacherB.id)?.isPrimary).toBe(false)
+
+    const editResponse = await handleApiRequest({
+      method: 'PATCH',
+      url: `/api/projects/${createdData.projectId}`,
+      headers: { 'x-test-user-id': teacherB.id },
+      body: { title: 'Ek danışman yetkisiz değişiklik' },
+    }, db)
+    expect(editResponse.statusCode).toBe(403)
+  })
+
+  it('TEACHER advisorUserIds içinde creator tekrarlanırsa tek primary kaydı oluşturur', async () => {
+    const created = await projectService.createProject(teacherA, {
+      title: 'Tekrarlanan Creator Danışmanı',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      projectType: 'TEACHER',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: [],
+      advisorUserIds: [teacherA.id, teacherA.id, teacherB.id],
+    })
+
+    const detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors).toHaveLength(2)
+    expect(detail.advisors.filter((advisor: { userId: string; isPrimary: boolean }) => advisor.userId === teacherA.id)).toHaveLength(1)
+    expect(detail.advisors.find((advisor: { userId: string; isPrimary: boolean }) => advisor.userId === teacherA.id)?.isPrimary).toBe(true)
+  })
+
+  it('TEACHER seçilen pasif veya TEACHER olmayan danışmanları reddeder ve proje kaydını geri alır', async () => {
+    const invalidAdvisors: Array<{ title: string; userId: string }> = [
+      { title: 'Pasif danışman', userId: 'inactive-teacher' },
+      { title: 'TEACHER olmayan danışman', userId: admin.id },
+      { title: 'Olmayan kullanıcı', userId: 'missing-user' },
+    ]
+    for (const { title, userId } of invalidAdvisors) {
+      await expect(projectService.createProject(teacherA, {
+        title,
+        academicYearId: 'year-2024',
+        categoryId: 'category-etwinning',
+        statusId: 'status-draft',
+        projectType: 'TEACHER',
+        participationType: 'INDIVIDUAL',
+        enrollmentIds: [],
+        advisorUserIds: [userId],
+      })).rejects.toThrow(ProjectRuleError)
+      const projects = await db.select().from(schema.projects).where(eq(schema.projects.title, title))
+      expect(projects).toHaveLength(0)
+    }
+  })
+
+  it('TEACHER, STUDENT projesinde ek danışman seçemez', async () => {
+    await expect(projectService.createProject(teacherA, {
+      title: 'Öğretmen Danışman Seçimi Öğrenci Projesinde Reddedilir',
+      academicYearId: 'year-2024',
+      categoryId: 'category-etwinning',
+      statusId: 'status-draft',
+      projectType: 'STUDENT',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-1'],
+      advisorUserIds: [teacherB.id],
+    })).rejects.toThrow(ProjectRuleError)
   })
 
   it('2. TEACHER, INSTITUTION projesi oluşturmaya çalıştığında 403 (AuthorizationError) almalı', async () => {

@@ -57,6 +57,13 @@
       "when": 1794580768168,
       "tag": "0007_round_lily_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794590000000,
+      "tag": "0008_dynamic_categories",
+      "breakpoints": true
     }
   ]
 }

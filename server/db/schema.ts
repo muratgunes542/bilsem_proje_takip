@@ -138,7 +138,7 @@ export const studentEnrollments = sqliteTable('student_enrollments', {
 
 export const projectCategories = sqliteTable('project_categories', {
   id: text('id').primaryKey(),
-  code: text('code', { enum: projectCategoryCodes }).notNull().unique(),
+  code: text('code').notNull().unique(),
   name: text('name').notNull(),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
   duplicateCheckEnabled: integer('duplicate_check_enabled', { mode: 'boolean' }).notNull().default(false),
