@@ -173,18 +173,20 @@ describe('Decoupled Class Advisorship and Project Advisorship Comprehensive Test
     ).rejects.toThrow('Seçilen danışman aktif bir öğretmen olmalıdır.')
   })
 
-  it('7. TEACHER başka öğretmenleri danışman olarak seçemez', async () => {
-    await expect(
-      projectService.createProject(teacherA, {
-        title: 'Teacher Advisor Selection Forbidden',
+  it('7. TEACHER, öğrenci projesinde ek öğretmenleri danışman olarak seçebilir', async () => {
+    const created = await projectService.createProject(teacherA, {
+        title: 'Teacher Student Advisor Selection',
         academicYearId: 'year-2024',
         categoryId: 'category-etwinning',
         statusId: 'status-draft',
         participationType: 'INDIVIDUAL',
         enrollmentIds: ['enroll-1'],
         advisorUserIds: [teacherB.id],
-      }),
-    ).rejects.toThrow('Öğretmenler danışman seçimi yapamaz.')
+      })
+    const detail = await projectService.getProjectDetail(admin, created.projectId)
+    expect(detail.advisors).toHaveLength(2)
+    expect(detail.advisors.find((advisor: { userId: string }) => advisor.userId === teacherA.id)?.isPrimary).toBe(true)
+    expect(detail.advisors.find((advisor: { userId: string }) => advisor.userId === teacherB.id)?.isPrimary).toBe(false)
   })
 
   it('8. Sınıf danışmanları hiçbir senaryoda proje danışmanı olarak eklenmez', async () => {

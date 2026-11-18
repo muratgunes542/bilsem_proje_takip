@@ -103,6 +103,24 @@ describe('Stage 3-7: Dynamic Categories & Category Management Test Suite', () =>
     expect(found).toBeDefined()
     expect(found?.name).toBe('TEKNOFEST Havacılık ve Uzay')
     expect(found?.duplicateCheckEnabled).toBe(true)
+    expect(found?.parentId).toBeNull()
+  })
+
+  it('project options preserve the category parent relationship and exclude inactive categories', async () => {
+    const parent = await projectService.createCategory(admin, { code: 'OPTION_PARENT', name: 'Option Parent' })
+    const child = await projectService.createCategory(admin, { code: 'OPTION_CHILD', name: 'Option Child', parentId: parent.id })
+    const options = await projectService.listProjectOptions(teacher)
+    expect(options.categories.find((category) => category.id === child.id)?.parentId).toBe(parent.id)
+    const apiOptions = await api('/api/project-options', 'GET', undefined, teacher.id)
+    expect(apiOptions.response.status).toBe(200)
+    expect(apiOptions.body.data.categories.find((category: { id: string }) => category.id === child.id).parentId).toBe(parent.id)
+
+    await projectService.updateCategory(admin, child.id, { isActive: false })
+    const activeOptions = await projectService.listProjectOptions(teacher)
+    expect(activeOptions.categories.some((category) => category.id === child.id)).toBe(false)
+    expect(activeOptions.categories.some((category) => category.id === parent.id)).toBe(true)
+    const apiOptionsAfterDeactivate = await api('/api/project-options', 'GET', undefined, teacher.id)
+    expect(apiOptionsAfterDeactivate.body.data.categories.some((category: { id: string }) => category.id === child.id)).toBe(false)
   })
 
   it('4. ADMIN can update category display name and toggle active status', async () => {
@@ -161,6 +179,31 @@ describe('Stage 3-7: Dynamic Categories & Category Management Test Suite', () =>
     const deleteAttempt = await api(`/api/admin/categories/${cat.id}`, 'DELETE', undefined, admin.id)
     expect(deleteAttempt.response.status).toBe(404)
     expect((await projectService.listCategories(admin)).some((category) => category.id === cat.id)).toBe(true)
+  })
+
+  it('project detail retains the parent id of a passive historical subcategory', async () => {
+    const parent = await projectService.createCategory(admin, { code: 'HIST_PARENT', name: 'Historical Parent' })
+    const child = await projectService.createCategory(admin, {
+      code: 'HIST_CHILD',
+      name: 'Historical Child',
+      parentId: parent.id,
+    })
+    const project = await projectService.createProject(teacher, {
+      title: 'Historical Subcategory Project',
+      academicYearId: 'year-2024',
+      categoryId: child.id,
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-c1'],
+    })
+
+    await projectService.updateCategory(admin, child.id, { isActive: false })
+
+    const detail = await projectService.getProjectDetail(teacher, project.projectId)
+    expect(detail.project.categoryId).toBe(child.id)
+    expect(detail.project.categoryParentId).toBe(parent.id)
+    const options = await projectService.listProjectOptions(teacher)
+    expect(options.categories.some((category) => category.id === child.id)).toBe(false)
   })
 
   it('6. Attempting to create a category with a duplicate code or name throws ProjectRuleError', async () => {

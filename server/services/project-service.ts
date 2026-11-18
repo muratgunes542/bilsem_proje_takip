@@ -72,6 +72,7 @@ export class ProjectService {
         id: schema.projectCategories.id,
         code: schema.projectCategories.code,
         name: schema.projectCategories.name,
+        parentId: schema.projectCategories.parentId,
         duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled,
       }).from(schema.projectCategories)
         .where(and(eq(schema.projectCategories.isActive, true), isNull(schema.projectCategories.deletedAt)))
@@ -479,6 +480,7 @@ export class ProjectService {
         academicYearName: schema.academicYears.name,
         categoryId: schema.projects.categoryId,
         categoryName: schema.projectCategories.name,
+        categoryParentId: schema.projectCategories.parentId,
         statusId: schema.projects.statusId,
         statusName: schema.projectStatuses.name,
         createdBy: schema.projects.createdBy,
@@ -713,7 +715,7 @@ export class ProjectService {
       }
 
       if (actor.role === 'TEACHER') {
-        if (effectiveProjectType !== 'TEACHER' && input.advisorUserIds !== undefined && input.advisorUserIds !== null) {
+        if (!['STUDENT', 'TEACHER'].includes(effectiveProjectType) && input.advisorUserIds !== undefined && input.advisorUserIds !== null) {
           throw new ProjectRuleError('Öğretmenler danışman seçimi yapamaz.')
         }
 

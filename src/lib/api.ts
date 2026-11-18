@@ -113,7 +113,7 @@ export type ReportTeacherRow = { id: string; name: string; email: string; isActi
 export type ProjectReportRow = { id: string; title: string; academicYearId: string; academicYearName: string; categoryId: string; categoryName: string; statusId: string; statusName: string; participationType: 'INDIVIDUAL' | 'TEAM'; teamName: string | null; createdBy: string; creatorName: string; createdAt: string; studentCount: number; advisors: string[] }
 
 export type ProjectOptions = {
-  categories: Array<{ id: string; code: string; name: string; duplicateCheckEnabled: boolean }>
+  categories: Array<{ id: string; code: string; name: string; parentId: string | null; duplicateCheckEnabled: boolean }>
   statuses: Array<{ id: string; code: string; name: string; isTerminal: boolean }>
   teachers?: Array<{ id: string; name: string }>
 }

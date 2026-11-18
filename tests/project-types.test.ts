@@ -31,7 +31,9 @@ describe('ProjectType (STUDENT, TEACHER, INSTITUTION) Architectural & Business R
       { id: admin.id, name: 'Yönetici 1', email: 'admin1@test.com', role: 'ADMIN', isActive: true },
       { id: teacherA.id, name: 'Öğretmen A', email: 'teachera@test.com', role: 'TEACHER', isActive: true },
       { id: teacherB.id, name: 'Öğretmen B', email: 'teacherb@test.com', role: 'TEACHER', isActive: true },
+      { id: 'teacher-c', name: 'Öğretmen C', email: 'teacherc@test.com', role: 'TEACHER', isActive: true },
       { id: 'inactive-teacher', name: 'Pasif Öğretmen', email: 'inactive@test.com', role: 'TEACHER', isActive: false },
+      { id: 'deleted-teacher', name: 'Silinmiş Öğretmen', email: 'deleted@test.com', role: 'TEACHER', isActive: true, deletedAt: new Date() },
     ])
 
     await db.insert(schema.academicYears).values([
@@ -176,17 +178,61 @@ describe('ProjectType (STUDENT, TEACHER, INSTITUTION) Architectural & Business R
     }
   })
 
-  it('TEACHER, STUDENT projesinde ek danışman seçemez', async () => {
-    await expect(projectService.createProject(teacherA, {
-      title: 'Öğretmen Danışman Seçimi Öğrenci Projesinde Reddedilir',
-      academicYearId: 'year-2024',
-      categoryId: 'category-etwinning',
-      statusId: 'status-draft',
-      projectType: 'STUDENT',
-      participationType: 'INDIVIDUAL',
-      enrollmentIds: ['enroll-1'],
-      advisorUserIds: [teacherB.id],
-    })).rejects.toThrow(ProjectRuleError)
+  it('TEACHER STUDENT projesini API üzerinden birden fazla danışmanla oluşturur; yalnızca sahibi düzenleyebilir', async () => {
+    const createResponse = await handleApiRequest({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { 'x-test-user-id': teacherA.id },
+      body: {
+        title: 'Danışmanlı Öğrenci Projesi',
+        academicYearId: 'year-2024',
+        categoryId: 'category-etwinning',
+        statusId: 'status-draft',
+        projectType: 'STUDENT',
+        participationType: 'TEAM',
+        teamName: 'Araştırma Takımı',
+        enrollmentIds: ['enroll-1', 'enroll-2'],
+        advisorUserIds: [teacherB.id, 'teacher-c'],
+      },
+    }, db)
+
+    expect(createResponse.statusCode).toBe(201)
+    const { projectId } = (createResponse.payload as { success: true; data: { projectId: string } }).data
+    const detail = await projectService.getProjectDetail(teacherB, projectId)
+    expect(detail.advisors).toHaveLength(3)
+    expect(detail.advisors.find((advisor: { userId: string }) => advisor.userId === teacherA.id)?.isPrimary).toBe(true)
+    expect(detail.advisors.find((advisor: { userId: string }) => advisor.userId === teacherB.id)?.isPrimary).toBe(false)
+    expect(detail.advisors.find((advisor: { userId: string }) => advisor.userId === 'teacher-c')?.isPrimary).toBe(false)
+    await expect(projectService.updateProject(teacherB, projectId, { title: 'Yetkisiz değişiklik' }))
+      .rejects.toThrow(AuthorizationError)
+    await expect(projectService.updateProjectAdvisors(teacherB, projectId, { addUserIds: ['teacher-c'] }))
+      .rejects.toThrow(AuthorizationError)
+    await expect(projectService.updateProject(teacherA, projectId, { title: 'Sahip güncelledi' }))
+      .resolves.toBeDefined()
+  })
+
+  it('TEACHER STUDENT creation rejects inactive, non-teacher and missing advisor accounts transactionally', async () => {
+    const invalidAdvisors = ['inactive-teacher', 'deleted-teacher', admin.id, 'missing-teacher']
+    for (const [index, advisorUserId] of invalidAdvisors.entries()) {
+      const title = `Geçersiz öğrenci danışmanı ${index}`
+      const response = await handleApiRequest({
+        method: 'POST',
+        url: '/api/projects',
+        headers: { 'x-test-user-id': teacherA.id },
+        body: {
+          title,
+          academicYearId: 'year-2024',
+          categoryId: 'category-etwinning',
+          statusId: 'status-draft',
+          projectType: 'STUDENT',
+          participationType: 'INDIVIDUAL',
+          enrollmentIds: ['enroll-1'],
+          advisorUserIds: [advisorUserId],
+        },
+      }, db)
+      expect(response.statusCode).toBe(422)
+      expect(await db.select().from(schema.projects).where(eq(schema.projects.title, title))).toHaveLength(0)
+    }
   })
 
   it('2. TEACHER, INSTITUTION projesi oluşturmaya çalıştığında 403 (AuthorizationError) almalı', async () => {
