@@ -81,11 +81,13 @@ const updateProjectAdvisorsSchema = z.object({
 const createCategorySchema = z.object({
   code: z.string().trim().min(2).max(50),
   name: z.string().trim().min(1).max(100),
+  parentId: z.string().trim().nullable().optional(),
   duplicateCheckEnabled: z.boolean().optional(),
 })
 
 const updateCategorySchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
+  parentId: z.string().trim().nullable().optional(),
   isActive: z.boolean().optional(),
   duplicateCheckEnabled: z.boolean().optional(),
 })

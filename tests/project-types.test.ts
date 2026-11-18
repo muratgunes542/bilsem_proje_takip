@@ -207,7 +207,7 @@ describe('ProjectType (STUDENT, TEACHER, INSTITUTION) Architectural & Business R
     const created = await projectService.createProject(admin, {
       title: 'TÜBİTAK 4006 Bilim Fuarı Kurumsal Projesi',
       academicYearId: 'year-2024',
-      categoryId: 'category-special-project',
+      categoryId: 'category-special-school',
       statusId: 'status-draft',
       projectType: 'INSTITUTION',
       participationType: 'INDIVIDUAL',

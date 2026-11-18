@@ -226,6 +226,7 @@ export type CategoryItem = {
   id: string
   code: string
   name: string
+  parentId: string | null
   isActive: boolean
   duplicateCheckEnabled: boolean
   duplicateRule?: string
@@ -237,15 +238,15 @@ export async function fetchAdminCategories() {
   return apiRequest<CategoryItem[]>('/api/admin/categories')
 }
 
-export async function createAdminCategory(input: { code: string; name: string; duplicateCheckEnabled?: boolean }) {
-  return apiRequest<{ id: string; code: string; name: string }>('/api/admin/categories', {
+export async function createAdminCategory(input: { code: string; name: string; parentId?: string | null; duplicateCheckEnabled?: boolean }) {
+  return apiRequest<{ id: string; code: string; name: string; parentId: string | null }>('/api/admin/categories', {
     method: 'POST',
     body: JSON.stringify(input),
   })
 }
 
-export async function updateAdminCategory(categoryId: string, input: { name?: string; isActive?: boolean; duplicateCheckEnabled?: boolean }) {
-  return apiRequest<{ id: string; name?: string; isActive?: boolean; duplicateCheckEnabled?: boolean }>(`/api/admin/categories/${categoryId}`, {
+export async function updateAdminCategory(categoryId: string, input: { name?: string; parentId?: string | null; isActive?: boolean; duplicateCheckEnabled?: boolean }) {
+  return apiRequest<{ id: string; name?: string; parentId?: string | null; isActive?: boolean; duplicateCheckEnabled?: boolean }>(`/api/admin/categories/${categoryId}`, {
     method: 'PATCH',
     body: JSON.stringify(input),
   })

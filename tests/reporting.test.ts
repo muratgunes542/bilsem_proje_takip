@@ -53,7 +53,7 @@ describe('Reporting and analytics use isolated synthetic records', () => {
     await projectService.createProject({ id: 'TEST-teacher-a', role: 'TEACHER', isActive: true }, { title: 'TEST Bireysel Proje', academicYearId: 'TEST-year-2025', categoryId: 'category-tubitak-2204-a', statusId: 'status-draft', participationType: 'INDIVIDUAL', enrollmentIds: ['TEST-enroll-a-25'] })
     const past = await projectService.createProject({ id: 'TEST-teacher-a', role: 'TEACHER', isActive: true }, { title: 'TEST Geçmiş Yıl Projesi', academicYearId: 'TEST-year-2024', categoryId: 'category-etwinning', statusId: 'status-completed', participationType: 'TEAM', teamName: 'TEST Eski Takım', enrollmentIds: ['TEST-enroll-a-24', 'TEST-enroll-c-24'] })
     await db.insert(schema.projectAdvisors).values({ projectId: past.projectId, userId: 'TEST-teacher-b', isPrimary: true }).onConflictDoNothing()
-    const archived = await projectService.createProject({ id: 'TEST-teacher-a', role: 'TEACHER', isActive: true }, { title: 'TEST Arşiv Projesi', academicYearId: 'TEST-year-2025', categoryId: 'category-special-project', statusId: 'status-draft', participationType: 'INDIVIDUAL', enrollmentIds: ['TEST-enroll-b-25'] })
+    const archived = await projectService.createProject({ id: 'TEST-teacher-a', role: 'TEACHER', isActive: true }, { title: 'TEST Arşiv Projesi', academicYearId: 'TEST-year-2025', categoryId: 'category-special-school', statusId: 'status-draft', participationType: 'INDIVIDUAL', enrollmentIds: ['TEST-enroll-b-25'] })
     archivedProjectId = archived.projectId
     await db.update(schema.projects).set({ deletedAt: new Date() }).where(eq(schema.projects.id, archivedProjectId))
   })

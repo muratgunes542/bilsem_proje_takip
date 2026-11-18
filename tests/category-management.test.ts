@@ -203,4 +203,73 @@ describe('Stage 3-7: Dynamic Categories & Category Management Test Suite', () =>
       enrollmentIds: ['enroll-c1'],
     })).rejects.toThrow(ProjectRuleError)
   })
+
+  it('7. Can create parent and subcategories, and handle hierarchy rules (self-parent, circular ref, passive parent, deactivating parent with subcats)', async () => {
+    const parent = await projectService.createCategory(admin, {
+      code: 'PARENT_CAT',
+      name: 'Parent Category',
+    })
+
+    const child = await projectService.createCategory(admin, {
+      code: 'CHILD_CAT',
+      name: 'Child Category',
+      parentId: parent.id,
+    })
+
+    // 1. Direct self-parent assignment
+    await expect(
+      projectService.updateCategory(admin, parent.id, { parentId: parent.id }),
+    ).rejects.toThrow(ProjectRuleError)
+
+    // 2. Indirect circular hierarchy (Parent -> Child -> Try making parent a child of child)
+    await expect(
+      projectService.updateCategory(admin, parent.id, { parentId: child.id }),
+    ).rejects.toThrow(ProjectRuleError)
+
+    // 3. Deactivating parent with active subcategories
+    await expect(
+      projectService.updateCategory(admin, parent.id, { isActive: false }),
+    ).rejects.toThrow(ProjectRuleError)
+
+    // 4. Deactivating subcategory then parent
+    await projectService.updateCategory(admin, child.id, { isActive: false })
+    const parentDeactivated = await projectService.updateCategory(admin, parent.id, { isActive: false })
+    expect(parentDeactivated.isActive).toBe(false)
+
+    // 5. Reactivating subcategory under passive parent (should fail because parent is passive)
+    await expect(
+      projectService.updateCategory(admin, child.id, { isActive: true }),
+    ).rejects.toThrow(ProjectRuleError)
+
+    // Reactivate parent first, then child
+    await projectService.updateCategory(admin, parent.id, { isActive: true })
+    const childReactivated = await projectService.updateCategory(admin, child.id, { isActive: true })
+    expect(childReactivated.isActive).toBe(true)
+  })
+
+  it('8. Changing parent and hierarchy maintenance across project creation and update', async () => {
+    const parent1 = await projectService.createCategory(admin, { code: 'P1', name: 'Parent 1' })
+    const parent2 = await projectService.createCategory(admin, { code: 'P2', name: 'Parent 2' })
+    const sub = await projectService.createCategory(admin, { code: 'SUB', name: 'Subcategory', parentId: parent1.id })
+
+    // Change parent of sub
+    const updatedSub = await projectService.updateCategory(admin, sub.id, { parentId: parent2.id })
+    expect(updatedSub.parentId).toBe(parent2.id)
+
+    // Create project with subcategory
+    const proj = await projectService.createProject(teacher, {
+      title: 'Hierarchy Project',
+      academicYearId: 'year-2024',
+      categoryId: sub.id,
+      statusId: 'status-draft',
+      participationType: 'INDIVIDUAL',
+      enrollmentIds: ['enroll-c1'],
+    })
+    expect(proj.projectId).toBeDefined()
+
+    // Update project category to another active category
+    await projectService.updateProject(teacher, proj.projectId, { categoryId: parent1.id })
+    const detail = await projectService.getProjectDetail(teacher, proj.projectId)
+    expect(detail.project.categoryId).toBe(parent1.id)
+  })
 })

@@ -41,3 +41,6 @@ auth-shm
 .env
 .env.*
 !.env.example
+
+# IDE & Agent Temporary Artifacts
+.artifacts/

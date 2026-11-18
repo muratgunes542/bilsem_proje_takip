@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Activity, AlertTriangle, BarChart3, Bell, Bookmark, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, FileSpreadsheet, FolderKanban, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, Search, Settings, Shield, Sparkles, Upload, Users, X } from 'lucide-react'
 import { z } from 'zod'
 import { apiRequest, apiPageRequest, ApiError, signOut, updateProjectAdvisors, fetchAdminCategories, createAdminCategory, updateAdminCategory, type AcademicYear, type ApiPage, type CategoryItem, type DashboardSummary, type Project, type ProjectOptions, type Role, type Student, type StudentProfile as StudentProfileData, type StudentProject, type UserProfile } from './lib/api'
@@ -1187,11 +1187,18 @@ function CategoriesAdmin({ notify }: { notify: (message: string, type?: Toast['t
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Create form state
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
+  const [parentId, setParentId] = useState<string>('')
   const [duplicateCheck, setDuplicateCheck] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
+
+  // Edit modal / inline state
+  const [editingCat, setEditingCat] = useState<CategoryItem | null>(null)
   const [editName, setEditName] = useState('')
+  const [editParentId, setEditParentId] = useState<string>('')
+  const [editIsActive, setEditIsActive] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1213,10 +1220,16 @@ function CategoriesAdmin({ notify }: { notify: (message: string, type?: Toast['t
     if (!code.trim() || !name.trim()) return
     setBusy(true)
     try {
-      await createAdminCategory({ code: code.trim(), name: name.trim(), duplicateCheckEnabled: duplicateCheck })
+      await createAdminCategory({
+        code: code.trim(),
+        name: name.trim(),
+        parentId: parentId || null,
+        duplicateCheckEnabled: duplicateCheck,
+      })
       notify('Yeni kategori başarıyla eklendi.')
       setCode('')
       setName('')
+      setParentId('')
       setDuplicateCheck(false)
       await load()
     } catch (err) {
@@ -1239,13 +1252,18 @@ function CategoriesAdmin({ notify }: { notify: (message: string, type?: Toast['t
     }
   }
 
-  async function handleSaveEdit(catId: string) {
-    if (!editName.trim()) return
+  async function handleSaveEdit(e: FormEvent) {
+    e.preventDefault()
+    if (!editingCat || !editName.trim()) return
     setBusy(true)
     try {
-      await updateAdminCategory(catId, { name: editName.trim() })
-      notify('Kategori adı güncellendi.')
-      setEditingId(null)
+      await updateAdminCategory(editingCat.id, {
+        name: editName.trim(),
+        parentId: editParentId || null,
+        isActive: editIsActive,
+      })
+      notify('Kategori güncellendi.')
+      setEditingCat(null)
       await load()
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Kategori güncellenemedi.', 'error')
@@ -1257,78 +1275,101 @@ function CategoriesAdmin({ notify }: { notify: (message: string, type?: Toast['t
   if (loading) return <LoadingState />
   if (error) return <ErrorState error={error} retry={load} />
 
+  // Build tree structure for display
+  const mainCategories = categories.filter((c) => !c.parentId)
+  const subCategoriesMap = new Map<string, CategoryItem[]>()
+  for (const c of categories) {
+    if (c.parentId) {
+      const list = subCategoriesMap.get(c.parentId) ?? []
+      list.push(c)
+      subCategoriesMap.set(c.parentId, list)
+    }
+  }
+
   return (
     <>
-      <PageHeading eyebrow="YÖNETİM" title="Kategori Yönetimi" description="Proje kategorilerini listeleyin, yeni kategoriler ekleyin ve aktif/pasif durumlarını yönetin." />
+      <PageHeading eyebrow="YÖNETİM" title="Kategori Yönetimi" description="Proje kategorilerini hiyerarşik olarak inceleyin, yeni ana/alt kategoriler ekleyin ve aktif/pasif durumlarını yönetin." />
       <div className="project-detail-layout">
         <section className="panel project-detail-main">
           <div className="panel-heading">
             <div>
-              <h3>Kategoriler <span>{categories.length}</span></h3>
-              <p>Sistemdeki tüm tanımlı proje kategorileri</p>
+              <h3>Kategori Ağacı <span>{categories.length}</span></h3>
+              <p>Ana ve alt kategori hiyerarşisi</p>
             </div>
           </div>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Kod</th>
-                  <th>Kategori Adı</th>
+                  <th>Kategori Adı / Kod</th>
+                  <th>Tür</th>
                   <th>Mükerrer Kontrolü</th>
                   <th>Durum</th>
                   <th>İşlemler</th>
                 </tr>
               </thead>
               <tbody>
-                {categories.map((cat) => (
-                  <tr key={cat.id} className={!cat.isActive ? 'row-passive' : ''}>
-                    <td><code>{cat.code}</code></td>
-                    <td>
-                      {editingId === cat.id ? (
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                          <input className="text-input" style={{ padding: '4px 8px' }} value={editName} onChange={(e) => setEditName(e.target.value)} />
-                          <button type="button" className="button button-small button-primary" disabled={busy} onClick={() => void handleSaveEdit(cat.id)}>Kaydet</button>
-                          <button type="button" className="button button-small button-secondary" onClick={() => setEditingId(null)}>İptal</button>
-                        </div>
-                      ) : (
-                        <b>{cat.name}</b>
-                      )}
-                    </td>
-                    <td>
-                      {cat.duplicateCheckEnabled ? (
-                        <span className="badge badge-warning">Aktif (2204)</span>
-                      ) : (
-                        <span className="badge badge-neutral">Pasif</span>
-                      )}
-                    </td>
-                    <td>
-                      {cat.isActive ? (
-                        <span className="badge badge-success">Aktif</span>
-                      ) : (
-                        <span className="badge badge-danger">Pasif</span>
-                      )}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        {editingId !== cat.id && (
-                          <button type="button" className="button button-small button-secondary" onClick={() => { setEditingId(cat.id); setEditName(cat.name); }}>Adını Değiştir</button>
-                        )}
-                        <button type="button" className={`button button-small ${cat.isActive ? 'button-secondary' : 'button-primary'}`} disabled={busy} onClick={() => void handleToggleActive(cat)}>
-                          {cat.isActive ? 'Pasife al' : 'Aktifleştir'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {mainCategories.map((main) => {
+                  const subs = subCategoriesMap.get(main.id) ?? []
+                  return (
+                    <Fragment key={main.id}>
+                      <tr className={!main.isActive ? 'row-passive' : ''}>
+                        <td>
+                          <b>{main.name}</b>
+                          <small style={{ display: 'block', color: '#64748b' }}><code>{main.code}</code></small>
+                        </td>
+                        <td><span className="badge badge-neutral">Ana Kategori</span></td>
+                        <td>{main.duplicateCheckEnabled ? <span className="badge badge-warning">Aktif (2204)</span> : <span className="badge badge-neutral">Pasif</span>}</td>
+                        <td>{main.isActive ? <span className="badge badge-success">Aktif</span> : <span className="badge badge-danger">Pasif</span>}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            <button type="button" className="button button-small button-secondary" onClick={() => { setEditingCat(main); setEditName(main.name); setEditParentId(main.parentId ?? ''); setEditIsActive(main.isActive); }}>Düzenle</button>
+                            <button type="button" className="button button-small button-secondary" onClick={() => { setParentId(main.id); }}>+ Alt Kategori</button>
+                            <button type="button" className={`button button-small ${main.isActive ? 'button-secondary' : 'button-primary'}`} disabled={busy} onClick={() => void handleToggleActive(main)}>
+                              {main.isActive ? 'Pasife al' : 'Aktifleştir'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {subs.map((sub) => (
+                        <tr key={sub.id} className={!sub.isActive ? 'row-passive' : ''} style={{ background: '#f8fafc' }}>
+                          <td style={{ paddingLeft: '32px' }}>
+                            <span>↳ {sub.name}</span>
+                            <small style={{ display: 'block', color: '#64748b', paddingLeft: '16px' }}><code>{sub.code}</code></small>
+                          </td>
+                          <td><span className="badge badge-neutral" style={{ background: '#e2e8f0', color: '#475569' }}>Alt Kategori</span></td>
+                          <td>{sub.duplicateCheckEnabled ? <span className="badge badge-warning">Aktif (2204)</span> : <span className="badge badge-neutral">Pasif</span>}</td>
+                          <td>{sub.isActive ? <span className="badge badge-success">Aktif</span> : <span className="badge badge-danger">Pasif</span>}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                              <button type="button" className="button button-small button-secondary" onClick={() => { setEditingCat(sub); setEditName(sub.name); setEditParentId(sub.parentId ?? ''); setEditIsActive(sub.isActive); }}>Düzenle</button>
+                              <button type="button" className={`button button-small ${sub.isActive ? 'button-secondary' : 'button-primary'}`} disabled={busy} onClick={() => void handleToggleActive(sub)}>
+                                {sub.isActive ? 'Pasife al' : 'Aktifleştir'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         </section>
         <aside className="panel project-actions">
           <h3>Yeni Kategori Ekle</h3>
-          <p>Benzersiz büyük harf kod ve kategori adı girin.</p>
+          <p>Yeni bir ana kategori veya mevcut bir üst kategori altında alt kategori oluşturun.</p>
           <form onSubmit={(e) => void handleCreate(e)} style={{ marginTop: '10px' }}>
-            <label className="field-label">Kategori Kodu (Örn: TEKNOFEST)
+            <label className="field-label">Üst Kategori (İsteğe bağlı)
+              <select className="text-input" value={parentId} onChange={(e) => setParentId(e.target.value)}>
+                <option value="">(Ana Kategori)</option>
+                {mainCategories.filter((m) => m.isActive).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field-label" style={{ marginTop: '10px' }}>Kategori Kodu (Örn: TEKNOFEST)
               <input className="text-input" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="TEKNOFEST" required />
             </label>
             <label className="field-label" style={{ marginTop: '10px' }}>Kategori Adı
@@ -1342,6 +1383,52 @@ function CategoriesAdmin({ notify }: { notify: (message: string, type?: Toast['t
           </form>
         </aside>
       </div>
+
+      {editingCat && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <h3>Kategori Düzenle</h3>
+            <p><b>{editingCat.code}</b> kategorisinin bilgilerini güncelleyin.</p>
+            <form onSubmit={(e) => void handleSaveEdit(e)} style={{ marginTop: '15px' }}>
+              <label className="field-label">Kategori Kodu
+                <input className="text-input" value={editingCat.code} disabled style={{ background: '#f1f5f9', cursor: 'not-allowed' }} />
+              </label>
+              <label className="field-label" style={{ marginTop: '10px' }}>Kategori Adı
+                <input className="text-input" value={editName} onChange={(e) => setEditName(e.target.value)} required />
+              </label>
+              <label className="field-label" style={{ marginTop: '10px' }}>Üst Kategori
+                <select className="text-input" value={editParentId} onChange={(e) => setEditParentId(e.target.value)}>
+                  <option value="">(Ana Kategori)</option>
+                  {(() => {
+                    const excludedIds = new Set<string>([editingCat.id])
+                    let added = true
+                    while (added) {
+                      added = false
+                      for (const c of categories) {
+                        if (c.parentId && excludedIds.has(c.parentId) && !excludedIds.has(c.id)) {
+                          excludedIds.add(c.id)
+                          added = true
+                        }
+                      }
+                    }
+                    return categories.filter((c) => !c.parentId && !excludedIds.has(c.id) && c.isActive).map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))
+                  })()}
+                </select>
+              </label>
+              <label className="checkbox-label" style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} />
+                <span>Kategori aktif</span>
+              </label>
+              <div className="modal-actions" style={{ marginTop: '20px' }}>
+                <button type="button" className="button button-secondary" disabled={busy} onClick={() => setEditingCat(null)}>İptal</button>
+                <button type="submit" className="button button-primary" disabled={busy}>{busy ? 'Kaydediliyor…' : 'Değişiklikleri Kaydet'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   )
 }

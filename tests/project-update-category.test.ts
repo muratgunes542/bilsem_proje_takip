@@ -90,12 +90,12 @@ describe('Stage 1 & 2: Project Update & Category Change Feature Tests', () => {
 
     await projectService.updateProject(teacher1, created.projectId, {
       title: 'Teacher 1 Updated Title',
-      categoryId: 'category-special-project',
+      categoryId: 'category-special-school',
     })
 
     const detail = await projectService.getProjectDetail(teacher1, created.projectId)
     expect(detail.project.title).toBe('Teacher 1 Updated Title')
-    expect(detail.project.categoryId).toBe('category-special-project')
+    expect(detail.project.categoryId).toBe('category-special-school')
   })
 
   it('3. TEACHER cannot update another teacher created project (AuthorizationError)', async () => {

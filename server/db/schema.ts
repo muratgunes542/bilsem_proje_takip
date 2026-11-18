@@ -140,6 +140,7 @@ export const projectCategories = sqliteTable('project_categories', {
   id: text('id').primaryKey(),
   code: text('code').notNull().unique(),
   name: text('name').notNull(),
+  parentId: text('parent_id'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
   duplicateCheckEnabled: integer('duplicate_check_enabled', { mode: 'boolean' }).notNull().default(false),
   duplicateRule: text('duplicate_rule').notNull().default('ACADEMIC_YEAR_STUDENT_CATEGORY'),

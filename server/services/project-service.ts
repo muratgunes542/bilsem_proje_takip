@@ -109,6 +109,7 @@ export class ProjectService {
         id: schema.projectCategories.id,
         code: schema.projectCategories.code,
         name: schema.projectCategories.name,
+        parentId: schema.projectCategories.parentId,
         isActive: schema.projectCategories.isActive,
         duplicateCheckEnabled: schema.projectCategories.duplicateCheckEnabled,
         duplicateRule: schema.projectCategories.duplicateRule,
@@ -122,12 +123,13 @@ export class ProjectService {
 
   async createCategory(
     actor: AuthenticatedUser,
-    input: { code: string; name: string; duplicateCheckEnabled?: boolean },
+    input: { code: string; name: string; parentId?: string | null; duplicateCheckEnabled?: boolean },
   ) {
     if (!actor?.isActive || actor.role !== 'ADMIN') throw new AuthorizationError()
 
     const code = input.code.trim().toUpperCase()
     const name = input.name.trim()
+    const parentId = input.parentId?.trim() || null
 
     if (!code || !/^[A-Z0-9_]{2,50}$/.test(code)) {
       throw new ProjectRuleError('Kategori kodu 2-50 karakter arasında ve büyük harf/rakam/alt çizgi olmalıdır.')
@@ -137,6 +139,20 @@ export class ProjectService {
     }
 
     return this.database.transaction(async (transaction) => {
+      if (parentId) {
+        const [parentCat] = await transaction
+          .select({ id: schema.projectCategories.id, isActive: schema.projectCategories.isActive })
+          .from(schema.projectCategories)
+          .where(and(eq(schema.projectCategories.id, parentId), isNull(schema.projectCategories.deletedAt)))
+          .limit(1)
+        if (!parentCat) {
+          throw new ProjectRuleError('Belirtilen üst kategori bulunamadı.')
+        }
+        if (!parentCat.isActive) {
+          throw new ProjectRuleError('Pasif bir üst kategoriye yeni alt kategori eklenemez.')
+        }
+      }
+
       const existing = await transaction
         .select({ id: schema.projectCategories.id })
         .from(schema.projectCategories)
@@ -157,6 +173,7 @@ export class ProjectService {
         id,
         code,
         name,
+        parentId,
         isActive: true,
         duplicateCheckEnabled: Boolean(input.duplicateCheckEnabled),
         duplicateRule: 'ACADEMIC_YEAR_STUDENT_CATEGORY',
@@ -170,17 +187,17 @@ export class ProjectService {
         action: 'ADMIN_CATEGORY_CREATED',
         entityType: 'CATEGORY',
         entityId: id,
-        afterJson: JSON.stringify({ id, code, name, duplicateCheckEnabled: Boolean(input.duplicateCheckEnabled) }),
+        afterJson: JSON.stringify({ id, code, name, parentId, duplicateCheckEnabled: Boolean(input.duplicateCheckEnabled) }),
       })
 
-      return { id, code, name }
+      return { id, code, name, parentId }
     })
   }
 
   async updateCategory(
     actor: AuthenticatedUser,
     categoryId: string,
-    input: { name?: string; isActive?: boolean; duplicateCheckEnabled?: boolean },
+    input: { name?: string; parentId?: string | null; isActive?: boolean; duplicateCheckEnabled?: boolean },
   ) {
     if (!actor?.isActive || actor.role !== 'ADMIN') throw new AuthorizationError()
 
@@ -195,7 +212,7 @@ export class ProjectService {
         throw new ResourceNotFoundError('Kategori bulunamadı.')
       }
 
-      const changes: Partial<{ name: string; isActive: boolean; duplicateCheckEnabled: boolean; updatedAt: Date }> = {
+      const changes: Partial<{ name: string; parentId: string | null; isActive: boolean; duplicateCheckEnabled: boolean; updatedAt: Date }> = {
         updatedAt: new Date(),
       }
 
@@ -221,8 +238,69 @@ export class ProjectService {
         changes.name = trimmedName
       }
 
+      if (input.parentId !== undefined) {
+        const newParentId = input.parentId?.trim() || null
+        if (newParentId === categoryId) {
+          throw new ProjectRuleError('Bir kategori kendi ebeveyni olamaz.')
+        }
+
+        if (newParentId) {
+          let currentParentId: string | null = newParentId
+          while (currentParentId) {
+            if (currentParentId === categoryId) {
+              throw new ProjectRuleError('Döngüsel kategori hiyerarşisi oluşturulamaz.')
+            }
+            const [pRow] = await transaction
+              .select({ parentId: schema.projectCategories.parentId })
+              .from(schema.projectCategories)
+              .where(eq(schema.projectCategories.id, currentParentId))
+              .limit(1)
+            currentParentId = pRow?.parentId ?? null
+          }
+
+          const [parentCat] = await transaction
+            .select({ id: schema.projectCategories.id, isActive: schema.projectCategories.isActive })
+            .from(schema.projectCategories)
+            .where(and(eq(schema.projectCategories.id, newParentId), isNull(schema.projectCategories.deletedAt)))
+            .limit(1)
+          if (!parentCat) {
+            throw new ProjectRuleError('Belirtilen üst kategori bulunamadı.')
+          }
+        }
+
+        changes.parentId = newParentId
+      }
+
       if (input.isActive !== undefined) {
-        changes.isActive = Boolean(input.isActive)
+        const newIsActive = Boolean(input.isActive)
+        if (!newIsActive) {
+          const activeSubcategories = await transaction
+            .select({ id: schema.projectCategories.id })
+            .from(schema.projectCategories)
+            .where(and(
+              eq(schema.projectCategories.parentId, categoryId),
+              eq(schema.projectCategories.isActive, true),
+              isNull(schema.projectCategories.deletedAt),
+            ))
+            .limit(1)
+
+          if (activeSubcategories[0]) {
+            throw new ProjectRuleError('Aktif alt kategorileri bulunan bir ana kategori pasifleştirilemez.')
+          }
+        } else {
+          const targetParentId = changes.parentId !== undefined ? changes.parentId : category.parentId
+          if (targetParentId) {
+            const [parentCat] = await transaction
+              .select({ isActive: schema.projectCategories.isActive })
+              .from(schema.projectCategories)
+              .where(and(eq(schema.projectCategories.id, targetParentId), isNull(schema.projectCategories.deletedAt)))
+              .limit(1)
+            if (!parentCat || !parentCat.isActive) {
+              throw new ProjectRuleError('Pasif bir üst kategoriye ait alt kategori aktifleştirilemez.')
+            }
+          }
+        }
+        changes.isActive = newIsActive
       }
 
       if (input.duplicateCheckEnabled !== undefined) {
@@ -606,7 +684,7 @@ export class ProjectService {
         .from(schema.projectCategories)
         .where(and(
           eq(schema.projectCategories.id, input.categoryId),
-          eq(schema.projectCategories.isActive, true),
+          or(eq(schema.projectCategories.isActive, true), isNull(schema.projectCategories.isActive)),
           isNull(schema.projectCategories.deletedAt),
         ))
         .limit(1)
@@ -850,7 +928,7 @@ export class ProjectService {
           isActive: schema.projectCategories.isActive,
           deletedAt: schema.projectCategories.deletedAt,
         }).from(schema.projectCategories).where(eq(schema.projectCategories.id, newCategoryId))
-        if (!newCat || !newCat.isActive || newCat.deletedAt !== null) {
+        if (!newCat || newCat.isActive === false || newCat.deletedAt !== null) {
           throw new ProjectRuleError('Projeler yalnızca aktif bir kategoriye taşınabilir.')
         }
         oldCategoryName = oldCat?.name ?? oldCategoryId
